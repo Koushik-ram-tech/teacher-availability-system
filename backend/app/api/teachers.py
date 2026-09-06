@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -14,6 +14,11 @@ router = APIRouter(prefix="/teachers", tags=["teachers"])
 
 def _normalize_acronym(value: str) -> str:
     return " ".join(value.strip().split()).upper()
+
+
+def _get_constraint_name(exc: IntegrityError) -> str:
+    diagnostic = getattr(exc.orig, "diag", None)
+    return getattr(diagnostic, "constraint_name", "") or ""
 
 
 def _get_teacher(db: Session, teacher_id: UUID) -> Teacher:
@@ -51,10 +56,21 @@ def create_teacher(payload: TeacherCreate, db: Session = Depends(get_db)) -> Tea
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        constraint = str(getattr(exc.orig, "diag", None))
-        if "uq_teachers_acronym_normalized" in constraint:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A teacher with this acronym already exists") from exc
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Teacher data violates a database constraint") from exc
+        constraint = _get_constraint_name(exc)
+        if constraint == "uq_teachers_acronym_normalized":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A teacher with this acronym already exists",
+            ) from exc
+        if constraint == "teachers_program_level_fk":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Teacher level does not match the selected program",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Teacher data violates a database constraint",
+        ) from exc
 
     return _get_teacher(db, teacher.id)
 
@@ -117,6 +133,9 @@ def update_teacher(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Updated teacher data conflicts with existing data") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Updated teacher data conflicts with existing data",
+        ) from exc
 
     return _get_teacher(db, teacher_id)
