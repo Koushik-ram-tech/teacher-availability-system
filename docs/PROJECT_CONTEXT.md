@@ -2,34 +2,39 @@
 
 ## 1. Project purpose
 
-This is a 4-day department-level prototype for teachers and the college director. Teachers maintain their weekly schedules; the director searches for a teacher and immediately sees that teacher's daily/weekly schedule and derived free periods.
+This is a four-day department-level prototype for teachers and the college Director. Teachers maintain their schedules; the Director searches for a teacher and immediately sees that teacher's daily/weekly schedule and derived free periods.
 
-The prototype is intentionally scoped to one department, but the data model should not prevent later college-wide expansion.
+The prototype is intentionally scoped to one department, but the data model is designed so the project can later expand to the whole college.
 
 ## 2. Primary users
 
 ### Teacher
+
 - Enter name and institutional acronym.
 - Select UG or PG.
-- Select the academic program/branch (for example MCA, MBA, MTech).
+- Select academic program/branch (for example MCA, MBA, MTech).
 - Select the semester being taught.
 - Enter/edit a weekly timetable using predefined department time slots.
-- Upload a timetable file in Excel, DOCX, or PDF format.
-- Review the parsed draft, correct mistakes, validate it, and save it.
+- Upload a timetable in Excel, DOCX, or PDF format.
+- Review the parsed draft, correct mistakes, validate it, and confirm it.
 
 ### Director
-- Search teachers by full/partial name or acronym, case-insensitively.
+
+- Search teachers by full/partial name or acronym.
+- Search is case-insensitive and supports partial matching.
 - Open a teacher profile.
-- See today's schedule, current status, and free periods.
-- Switch days and view the whole week.
+- See today's schedule and current status.
+- See free periods for the selected day.
+- Switch days and view the complete week.
 
 ## 3. Core business idea
 
-The application is a timetable/availability system, not a generic calendar. The department has fixed time slots. Teachers are assigned to different slots. `FREE` is not stored; it is calculated from configured working slots minus occupied slots.
+This is a timetable/availability system, not a generic calendar. The department has fixed time slots. Teachers are assigned to different slots. `FREE` is a derived state calculated from configured working slots minus occupied slots.
 
 ## 4. Department timetable rules
 
-Default slots currently configured:
+Default teaching slots:
+
 - S1: 08:00–08:55
 - S2: 08:55–09:50
 - S3: 09:50–10:45
@@ -42,169 +47,221 @@ Default slots currently configured:
 - S8: 15:50–16:45
 - S9: 16:45–17:40
 
-Labs normally occupy two consecutive 55-minute slots, giving 1 hour 50 minutes. The system should model labs as one schedule entry linked to multiple slots.
+Each normal teaching slot is 55 minutes. The standard lab duration is 1 hour 50 minutes, represented by one logical lab entry linked to two consecutive configured slots.
 
-Monday–Friday are the initial default working days. Saturday should remain configurable rather than hard-coded as always active.
+Monday-Friday are the initial enabled working days. Saturday is supported as configurable rather than assumed active. Sunday is not a working day in the prototype.
 
-Do not let teachers type arbitrary times for normal timetable entries. They select from configured slots.
+Teachers do not enter arbitrary clock times for normal schedule entries; they select configured slots.
 
-## 5. Architecture
+## 5. Recommended architecture
 
-Recommended stack for the prototype:
 - Frontend: Next.js + TypeScript
 - Backend: FastAPI + Python
-- Database: PostgreSQL (Supabase is a practical hosted option)
-- File parsing: Python libraries appropriate to format: openpyxl for Excel, python-docx for DOCX, PyMuPDF for PDF
-- API style: REST
+- Database: PostgreSQL (Supabase is acceptable for the prototype)
+- API: REST under `/api/v1`
+- Excel parsing: `openpyxl`
+- DOCX parsing: `python-docx`
+- PDF parsing: `PyMuPDF`
 
-The parsers must normalize all supported input formats into one internal timetable representation. The parser is an input method, not the source of truth.
+All import formats must normalize to the same internal timetable representation. The parser is an input method, not the source of truth.
 
-## 6. Data model
+## 6. Final MVP database model
 
-### programs
-Reference data for academic programs.
-Fields:
-- id UUID primary key
-- name text
-- level UG/PG
-- is_active boolean
+The executable schema is `database/schema.sql` and should be treated as the authoritative schema for a fresh database.
 
-Examples: MCA, MBA, MTech.
+### `programs`
 
-### teachers
-Stores faculty identity and academic context.
-Fields:
-- id UUID primary key
-- name text required
-- acronym text required and unique for the prototype
-- level UG/PG
-- program_id foreign key to programs
-- semester positive integer
-- department text
-- is_active boolean
-- created_at/updated_at timestamps
+Academic program reference data: `id`, `name`, `level`, `is_active`.
 
-### time_slots
-Fixed department timetable configuration.
-Fields:
-- id UUID primary key
-- code S1–S9
-- start_time
-- end_time
-- sequence
-- is_active
+### `teachers`
 
-### timetables
-A teacher's schedule version.
-Fields:
-- id UUID primary key
-- teacher_id foreign key
-- academic_year
-- effective_from/effective_to optional dates
-- status DRAFT or CONFIRMED
-- source MANUAL or IMPORT
-- last_verified_at
-- created_at/updated_at
+Faculty identity and teaching context: `id`, `name`, `acronym`, `level`, `program_id`, `semester`, `department`, `is_active`, timestamps.
 
-### schedule_entries
-One occupied activity.
-Fields:
-- id UUID primary key
-- timetable_id foreign key
-- day_of_week 1–7
-- entry_type CLASS, LAB, or OTHER
-- subject_or_activity
-- section optional
-- room optional
-- notes optional
+The teacher-to-program relationship enforces matching UG/PG levels. Acronyms are unique after trimming and case normalization.
 
-### schedule_entry_slots
-Join table between an entry and one or more time slots. Required because a lab may occupy two consecutive slots.
-Primary key: (schedule_entry_id, time_slot_id).
+### `time_slots`
 
-## 7. Why FREE is derived
+Fixed department scheduling configuration: `id`, `code`, `start_time`, `end_time`, `sequence`, `is_active`.
 
-Never save a `FREE` row in the database as the source of truth. Availability is calculated as:
+### `timetables`
 
-`configured working slots - teacher occupied slots = free slots`
+A version of a teacher's schedule: `id`, `teacher_id`, `academic_year`, optional effective dates, `status`, `source`, `last_verified_at`, timestamps.
 
-Breaks and lunch are fixed schedule configuration, not teacher-created free periods.
+The MVP allows at most one confirmed timetable for a teacher in a given academic year; multiple drafts can exist during editing/import.
 
-## 8. Data flow
+### `schedule_entries`
 
-Manual path:
-Teacher → timetable form → validation → draft/confirm → PostgreSQL
+A logical occupied activity: `id`, `timetable_id`, `day_of_week`, `entry_type`, `subject_or_activity`, optional `section`, `room`, `notes`.
 
-Import path:
-File upload → file-type parser → normalized timetable draft → identity matching → validation → editable preview → teacher correction → confirmation → PostgreSQL
+Entry types are `CLASS`, `LAB`, and `OTHER`.
 
-Director path:
-Search teacher → retrieve confirmed timetable → calculate occupied/free state → daily or weekly presentation.
+### `schedule_entry_slots`
 
-Imported data must never be written directly into confirmed timetable data before human review/confirmation.
+Join table between schedule entries and one or more configured time slots. This is required for labs spanning multiple periods.
 
-## 9. Important validation rules
+The database also performs deferred validation to reject overlapping activities in a confirmed timetable for the same day and slot.
+
+## 7. Why FREE is not stored
+
+Never store `FREE` as a normal timetable row.
+
+```text
+enabled working slots
+        -
+occupied schedule-entry slots
+        =
+free slots
+```
+
+Break and lunch are fixed schedule configuration and are displayed separately. They are not reported as teacher free periods.
+
+## 8. Manual data flow
+
+```text
+Teacher
+  ↓
+Profile information
+  ↓
+Timetable editor
+  ↓
+Draft timetable
+  ↓
+Validation
+  ↓
+Confirmation
+  ↓
+PostgreSQL
+```
+
+## 9. Import data flow
+
+```text
+Uploaded Excel/DOCX/PDF
+  ↓
+Format-specific parser
+  ↓
+Normalized timetable draft
+  ↓
+Teacher name/acronym matching
+  ↓
+Warnings + validation
+  ↓
+Editable preview
+  ↓
+Teacher correction
+  ↓
+Confirmation
+  ↓
+PostgreSQL
+```
+
+Imported data must never bypass review and write directly into confirmed timetable data.
+
+A parser must not silently guess an ambiguous day, slot, teacher, or activity. Ambiguity becomes a warning for manual correction.
+
+## 10. Required validation
 
 At minimum:
+
+- required/nonblank teacher identity fields
+- valid UG/PG value
+- valid program and matching level
+- positive semester
+- normalized acronym uniqueness
 - valid day
 - valid configured slot
-- no duplicate occupancy for the same teacher/day/slot in a confirmed timetable
-- lab entries must use valid consecutive slots according to department rules
-- required teacher identity fields
-- acronym normalization and uniqueness checks
-- imported identity must match teacher name or acronym, otherwise show a warning/manual confirmation path
-- no saving an invalid or unresolved timetable
-- a teacher should not have overlapping active/confirmed timetable versions for the same effective period
+- no duplicate slot occupancy in confirmed schedules
+- valid consecutive slot usage for labs
+- no invalid/unresolved import warnings at confirmation
+- no more than one confirmed timetable per teacher per academic year
 
-Some of these constraints belong in the database; others need service-layer validation because PostgreSQL alone cannot express the business rule conveniently in the current normalized model.
+## 11. Director behavior
 
-## 10. Director behavior
+The Director's daily view should clearly show:
 
-Search should be:
-- case-insensitive
-- partial-match friendly
-- name-aware
-- acronym-aware
-
-Director's daily view should clearly show:
-- teacher identity
-- current status where a current-time comparison is applicable
-- each timetable slot
+- teacher name and acronym
+- program/semester context where useful
+- each configured teaching slot
 - break/lunch
-- free periods
-- full-week option
+- occupied activity
+- derived free periods
+- current status when current local time falls within a configured period
+- a full-week option
 
-## 11. Prototype non-goals
+The first answer the interface should make obvious is: **Is this teacher free, and when?**
 
-Do not expand the 4-day prototype with college-wide administration, mobile apps, notifications, leave management, room allocation, substitution workflows, attendance, SSO, WhatsApp integrations, or chatbot features. Those belong to later phases after Director approval.
+## 12. Prototype non-goals
 
-## 12. Team working model
+Do not add college-wide administration, mobile apps, notifications, leave management, room allocation, substitution workflows, attendance, SSO, WhatsApp integration, or a chatbot during this four-day prototype. These belong to later phases.
 
-There are two developers. Do not permanently split into frontend/backend. Work in vertical slices so both people touch database + API + UI + tests.
+## 13. Two-person development model
+
+Both developers work full-stack. Do not permanently divide frontend/backend/database ownership.
+
+Each feature should be a vertical slice that may touch:
+
+```text
+Database → API → UI → Tests
+```
 
 Recommended workflow:
-1. Create feature branch.
-2. Implement one bounded feature end-to-end.
+
+1. Create a focused feature branch.
+2. Implement the feature end-to-end where practical.
 3. Add tests.
-4. Commit.
-5. Open PR.
+4. Commit with a descriptive prefix.
+5. Open a pull request.
 6. Teammate reviews.
-7. Merge to main.
+7. Merge only after tests/review pass.
 
-`main` must remain the stable integration branch.
+`main` remains the stable integration branch.
 
-## 13. 4-day delivery target
+## 14. Four-day delivery target
 
-Day 1: database/API/frontend foundation + teacher and director core vertical slices.
-Day 2: timetable validation, labs, availability engine, daily/weekly director views.
-Day 3: Excel/DOCX/PDF import, normalization, identity matching, editable review flow.
-Day 4: aggressive end-to-end testing, edge cases, bug fixes, deployment, demo data, final demo.
+### Day 1 — Foundation + core vertical slices
 
-## 14. Definition of success
+Lock architecture/schema/API contracts and get teacher persistence plus Director search/schedule retrieval working end-to-end.
 
-The end-to-end demo must work:
-Teacher creates or uploads timetable → system parses/normalizes → teacher reviews/edits → timetable is confirmed in PostgreSQL → Director searches by name/acronym → Director sees today's timetable and accurately derived free periods → Director can view the full week.
+### Day 2 — Timetable engine + availability
 
-## 15. Development principle
+Implement validation, labs, collision handling, free-time calculation, current status, and daily/weekly Director views.
 
-Prefer deterministic rules over hidden assumptions. Do not invent timetable slots, days, branch mappings, or parsing interpretations silently. When input is ambiguous, preserve it as a draft warning for human correction.
+### Day 3 — Import pipeline
+
+Implement Excel, DOCX, PDF extraction, normalization, identity matching, warnings, editable import review, validation, and confirmation.
+
+### Day 4 — QA + release
+
+Freeze features. Run aggressive end-to-end and edge-case tests, fix defects, deploy, seed realistic demo data, and rehearse the Director demonstration.
+
+## 15. Definition of success
+
+```text
+Teacher creates or uploads timetable
+        ↓
+System parses/normalizes
+        ↓
+Teacher reviews and edits
+        ↓
+Validation passes
+        ↓
+Timetable is confirmed in PostgreSQL
+        ↓
+Director searches name/acronym
+        ↓
+Director sees today's schedule + accurate free periods
+        ↓
+Director can view full week
+```
+
+## 16. Source-of-truth files
+
+When there is a conflict, use this order:
+
+1. `database/schema.sql`
+2. `docs/DATA_MODEL.md`
+3. `docs/TIMETABLE_RULES.md`
+4. `docs/API.md`
+5. other implementation files
+
+Do not silently change the architecture or schema. Propose and document contract changes first.
