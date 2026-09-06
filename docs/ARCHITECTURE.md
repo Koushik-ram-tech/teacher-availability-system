@@ -26,13 +26,20 @@ Daily schedule / free periods / weekly schedule
 
 ### Frontend
 
-Next.js + TypeScript.
+React + TypeScript + Vite.
 
 Responsibilities:
 - Teacher profile and timetable editor
 - Upload and import review UI
 - Director search and schedule views
 - Client-side form validation and API integration
+- Client-side routing between teacher and director panels
+
+Recommended supporting libraries:
+- React Router for routing
+- TanStack Query for server-state fetching/caching
+- Axios for REST API communication
+- Tailwind CSS + shadcn/ui for the prototype UI
 
 ### Backend
 
@@ -48,10 +55,10 @@ Responsibilities:
 
 ### Database
 
-PostgreSQL (Supabase is acceptable for the prototype).
+PostgreSQL (Supabase is used for the prototype).
 
 Responsibilities:
-- Teacher/program/semester data
+- Teacher/program data
 - Timetable metadata
 - Fixed time-slot definitions
 - Confirmed schedule entries
@@ -66,3 +73,4 @@ Responsibilities:
 6. Parser output from Excel, DOCX, and PDF must normalize into the same internal schedule structure.
 7. Ambiguous parser results must be surfaced for human correction instead of silently guessed.
 8. `main` is the stable integration branch.
+9. The frontend communicates with the backend through the versioned REST API; it does not connect directly to PostgreSQL.
