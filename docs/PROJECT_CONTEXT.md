@@ -55,15 +55,17 @@ Teachers do not enter arbitrary clock times for normal schedule entries; they se
 
 ## 5. Recommended architecture
 
-- Frontend: Next.js + TypeScript
+- Frontend: React + TypeScript + Vite
 - Backend: FastAPI + Python
-- Database: PostgreSQL (Supabase is acceptable for the prototype)
+- Database: PostgreSQL (Supabase)
 - API: REST under `/api/v1`
 - Excel parsing: `openpyxl`
 - DOCX parsing: `python-docx`
 - PDF parsing: `PyMuPDF`
 
 All import formats must normalize to the same internal timetable representation. The parser is an input method, not the source of truth.
+
+The frontend communicates with the backend API and must not connect directly to PostgreSQL.
 
 ## 6. Final MVP database model
 
