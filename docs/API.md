@@ -6,7 +6,13 @@ The API is versioned under `/api/v1`.
 
 `GET /api/v1/health`
 
-Returns service health/status.
+Returns service health and verifies that the FastAPI process can reach PostgreSQL.
+
+## Programs
+
+`GET /api/v1/teachers/programs`
+
+Return active academic programs used by the teacher profile form. The endpoint is currently nested under the teacher router to keep the Day-1 vertical slice small; it may move to `/programs` without changing the database contract later.
 
 ## Teachers
 
