@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Routes } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
@@ -14,7 +14,7 @@ const initialForm: TeacherCreatePayload = {
   department: 'Prototype Department',
 };
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children }: { children: ReactNode }) {
   return (
     <main className="shell">
       <div className="app-bar">
