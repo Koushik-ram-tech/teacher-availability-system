@@ -6,11 +6,16 @@ Department-level prototype for managing faculty timetables and allowing the Dire
 
 Core workflow:
 
-Teacher → enter/upload timetable → editable review → validation → PostgreSQL → Director search → daily availability → weekly schedule
+```text
+Teacher → enter/upload timetable → editable review → validation → PostgreSQL
+→ Director search → daily availability → weekly schedule
+```
 
-## Planned Stack
+## Stack
 
-- Frontend: Next.js + TypeScript
+- Frontend: React + TypeScript + Vite
+- Frontend data: TanStack Query + Axios
+- Routing: React Router
 - Backend: FastAPI + Python
 - Database: PostgreSQL / Supabase
 - Timetable parsing: Excel, DOCX, PDF
@@ -18,12 +23,30 @@ Teacher → enter/upload timetable → editable review → validation → Postgr
 ## Repository Structure
 
 ```text
-frontend/       Next.js application
+frontend/       React + Vite application
 backend/        FastAPI application
 database/       schema, seeds, migrations
 docs/           architecture and project contracts
-sample_files/  parser test inputs
+sample_files/   parser test inputs
 ```
+
+## Current Day-1 Vertical Slice
+
+The first end-to-end slice is teacher identity persistence and Director search:
+
+```text
+React form
+   ↓
+FastAPI
+   ↓
+Supabase PostgreSQL
+   ↓
+Teacher stored/retrieved
+   ↓
+Director searches by name/acronym
+```
+
+Timetable CRUD, availability, import parsing, and review workflows follow the four-day plan in `docs/4_DAY_PLAN.md`.
 
 ## Timetable Rules
 
