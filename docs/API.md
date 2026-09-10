@@ -38,52 +38,90 @@ Update teacher profile.
 
 ## Timetable
 
-`POST /api/v1/teachers/{teacher_id}/timetable`
+### GET (read a single day's schedule)
 
-Create or replace a draft timetable from a normalized payload.
+```
+GET /api/v1/teachers/{teacher_id}/timetable
+    ?day=<day_name>
+    &academic_year=<year>
+    &status=<DRAFT|CONFIRMED>
+```
 
-`GET /api/v1/teachers/{teacher_id}/timetable?day=<day>`
+All three query parameters are **required**.
 
-Return the selected day's schedule including configured slots and breaks.
+#### Exact matching
 
-`GET /api/v1/teachers/{teacher_id}/timetable/week`
+The server resolves the timetable by the tuple `(teacher_id, academic_year, status)` with no fallback, no inference, and no cross-year lookup.
 
-Return the complete weekly schedule.
+- `academic_year` — must be supplied by the caller verbatim (e.g. `2025-2026`). The server never infers a "current year".
+- `status` — must be exactly `DRAFT` or `CONFIRMED`. No automatic fallback from CONFIRMED to DRAFT or vice versa.
 
-`PUT /api/v1/teachers/{teacher_id}/timetable`
+#### 404 semantics
 
-Update a timetable after teacher edits.
+A **404** response means the exact requested timetable does not exist.
 
-`POST /api/v1/teachers/{teacher_id}/timetable/confirm`
+Only a 404 may be interpreted by the frontend as "no timetable exists yet for this combination".
 
-Validate and confirm a draft timetable.
+All other errors (`400`, `409`, `422`, `500`, network errors, timeouts, CORS errors) must be treated as real errors by the frontend and must not be silently treated as "empty schedule".
 
-## Availability
-
-`GET /api/v1/teachers/{teacher_id}/availability?day=<day>`
-
-Return occupied slots, free slots, and fixed breaks for the day.
-
-The service derives free periods from configured working slots minus occupied schedule-entry slots.
-
-## Import
-
-`POST /api/v1/import/parse`
-
-Accept an Excel, DOCX, or PDF file and return a normalized draft plus warnings. This endpoint does not persist a confirmed timetable.
-
-`POST /api/v1/import/validate`
-
-Validate a normalized import draft against timetable rules and teacher identity.
-
-## Normalized schedule payload
+#### Response shape
 
 ```json
 {
-  "teacher": {
-    "name": "Example Teacher",
-    "acronym": "ET"
-  },
+  "teacher_id": "uuid",
+  "academic_year": "2025-2026",
+  "day": "monday",
+  "timetable_status": "DRAFT",
+  "periods": [
+    {
+      "kind": "SLOT",
+      "code": "S1",
+      "start_time": "08:00:00",
+      "end_time": "08:55:00",
+      "entry": null
+    },
+    {
+      "kind": "BREAK",
+      "label": "Morning break",
+      "start_time": "10:45:00",
+      "end_time": "11:15:00",
+      "entry": null
+    }
+  ]
+}
+```
+
+#### Purpose of DRAFT vs CONFIRMED
+
+- **DRAFT** — teacher editor reads and writes only DRAFT timetables. The teacher's daily editing never touches a CONFIRMED timetable.
+- **CONFIRMED** — Director view reads only CONFIRMED timetables. No fallback to DRAFT.
+
+### POST (create a new draft)
+
+```
+POST /api/v1/teachers/{teacher_id}/timetable
+```
+
+Creates a new **DRAFT** timetable for the exact `(teacher_id, academic_year)` supplied in the body.
+Returns `409` if a DRAFT already exists for that combination (use PUT to update).
+Never creates or modifies a CONFIRMED timetable.
+
+### PUT (replace an existing draft)
+
+```
+PUT /api/v1/teachers/{teacher_id}/timetable
+```
+
+Atomically replaces all entries in the existing **DRAFT** timetable identified by `(teacher_id, academic_year)`.
+Returns `404` if no DRAFT exists for that combination (use POST to create).
+Validation runs before any deletion; a constraint failure leaves the previous draft intact.
+Never touches a CONFIRMED timetable.
+
+### Normalized schedule payload (POST and PUT body)
+
+```json
+{
+  "academic_year": "2025-2026",
   "days": {
     "monday": [
       {
@@ -93,21 +131,28 @@ Validate a normalized import draft against timetable rules and teacher identity.
         "section": "MCA-A",
         "room": "204",
         "notes": null
+      },
+      {
+        "slot_ids": ["S6", "S7"],
+        "entry_type": "LAB",
+        "subject_or_activity": "DBMS Lab",
+        "section": null,
+        "room": "Lab 3",
+        "notes": null
       }
     ]
   }
 }
 ```
 
+`slot_ids` contains canonical slot codes (`S1`–`S9`). A lab spanning two slots uses a single entry with multiple codes in `slot_ids`.
+
 ## Error contract
 
 Use consistent HTTP statuses and machine-readable error responses:
 
-- `400` invalid request/validation input
-- `404` teacher or timetable not found
-- `409` schedule conflict or duplicate identity
-- `413` unsupported/oversized upload
-- `422` semantically invalid normalized data
+- `400` invalid request / validation input
+- `404` teacher or timetable not found (exact match)
+- `409` draft already exists (POST) / schedule conflict
+- `422` semantically invalid data (Pydantic validation failure)
 - `500` unexpected server error
-
-Import warnings are returned as structured objects so the frontend can show exactly what requires correction.

@@ -22,3 +22,14 @@ venv/
 # Uploaded/generated files
 uploads/
 tmp/
+
+# Frontend build output
+frontend/dist/
+
+# Node dependencies
+frontend/node_modules/
+
+# Python virtual environment
+backend/.venv/
+
+frontend/package-lock.json
