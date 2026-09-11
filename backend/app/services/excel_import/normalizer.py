@@ -75,8 +75,9 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
     # ------------------------------------------------------------------ #
 
     teacher_rows: list[TeacherImportRow] = []
-    # Track acronyms already seen in *this workbook* to catch sheet-level dups
-    seen_acronyms: dict[str, str] = {}  # normalised acronym → row_ref
+    # Track (acronym, department) combinations already seen in *this workbook*
+    # to catch sheet-level duplicates. Department is now part of teacher identity.
+    seen_identities: dict[tuple[str, str], str] = {}  # (normalized_acronym, normalized_dept) → row_ref
 
     for raw_t in raw["teachers"]:
         row_ref: str = raw_t["row_ref"]
@@ -93,13 +94,6 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
         acronym = acronym_raw.strip().upper() if acronym_raw else ""
         if not acronym:
             row_errors.append(f"{row_ref}: acronym is required.")
-        elif acronym in seen_acronyms:
-            row_errors.append(
-                f"{row_ref}: duplicate acronym '{acronym}' "
-                f"(first seen at {seen_acronyms[acronym]})."
-            )
-        else:
-            seen_acronyms[acronym] = row_ref
 
         # level
         level_raw = raw_t.get("level")
@@ -160,6 +154,18 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
         dept_raw = raw_t.get("department")
         department = (dept_raw.strip() if dept_raw else "") or "Prototype Department"
 
+        # Check for duplicate (acronym, department) within this workbook
+        # Department is part of teacher identity - same acronym in different departments is allowed
+        if acronym and department:
+            identity_key = (acronym, department.upper())
+            if identity_key in seen_identities:
+                row_errors.append(
+                    f"{row_ref}: duplicate teacher identity (acronym='{acronym}', department='{department}') "
+                    f"(first seen at {seen_identities[identity_key]})."
+                )
+            else:
+                seen_identities[identity_key] = row_ref
+
         errors.extend(row_errors)
         if not row_errors and name and acronym and level in VALID_LEVELS and program_name and semester:
             teacher_rows.append(
@@ -178,11 +184,14 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
             )
 
     # Acronyms that passed normalisation — used to validate Schedule rows
-    valid_acronyms: set[str] = {t.acronym for t in teacher_rows}
+    # Build acronym → set of departments mapping to detect ambiguity
+    acronym_to_departments: dict[str, set[str]] = {}
+    for t in teacher_rows:
+        acronym_to_departments.setdefault(t.acronym, set()).add(t.department.upper())
 
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------------- #
     # Schedule sheet                                                       #
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------------- #
 
     days: dict[str, list[ScheduleImportRow]] = {}
     # Collision tracking: (acronym, day) → set of slot codes already claimed
@@ -197,10 +206,18 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
         teacher_acronym = ta_raw.strip().upper() if ta_raw else ""
         if not teacher_acronym:
             row_errors.append(f"{row_ref}: teacher_acronym is required.")
-        elif teacher_acronym not in valid_acronyms:
+        elif teacher_acronym not in acronym_to_departments:
             row_errors.append(
-                f"{row_ref}: Unknown teacher acronym '{teacher_acronym}'. "
-                "It must appear in the Teachers sheet."
+                f"{row_ref}: teacher_acronym '{teacher_acronym}' not found in Teachers sheet."
+            )
+        elif len(acronym_to_departments[teacher_acronym]) > 1:
+            # AMBIGUOUS: Same acronym exists in multiple departments
+            depts = sorted(acronym_to_departments[teacher_acronym])
+            row_errors.append(
+                f"{row_ref}: teacher_acronym '{teacher_acronym}' is ambiguous - "
+                f"found in departments: {', '.join(depts)}. "
+                "Cannot determine which teacher this schedule entry belongs to. "
+                "Use unique acronyms or separate imports per department."
             )
 
         # day

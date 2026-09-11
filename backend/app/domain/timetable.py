@@ -140,13 +140,16 @@ class TeacherIdentity:
     Avoids duplicating teacher information across multiple activities.
     Supports both resolved (existing DB teacher) and unresolved (new) teachers.
     
+    IMPORTANT: Teacher identity is scoped by (acronym, department).
+    Two teachers with the same acronym in different departments are distinct identities.
+    
     resolved_teacher_id: UUID of existing teacher in DB (None if new)
-    acronym: stable identifier for this import
+    acronym: stable identifier within department
     name: full name
     level: UG/PG
     program_name: program name (e.g. "MCA")
     semester: semester number
-    department: department name (future: will be normalized)
+    department: department name (part of teacher identity)
     """
     
     acronym: str

@@ -30,6 +30,12 @@ class Teacher(Base):
         ForeignKeyConstraint(["program_id", "level"], ["programs.id", "programs.level"], name="teachers_program_level_fk"),
         CheckConstraint("level IN ('UG', 'PG')", name="teachers_level_check"),
         CheckConstraint("semester > 0", name="teachers_semester_check"),
+        CheckConstraint("btrim(name) <> ''", name="teachers_name_not_blank"),
+        CheckConstraint("btrim(acronym) <> ''", name="teachers_acronym_not_blank"),
+        CheckConstraint("btrim(department) <> ''", name="teachers_department_not_blank"),
+        # NOTE: Uniqueness constraint is (normalized_acronym, normalized_department)
+        # enforced by database index: uq_teachers_acronym_department_normalized
+        # Teachers with same acronym can exist in different departments
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))

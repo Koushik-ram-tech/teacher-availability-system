@@ -47,9 +47,14 @@ CREATE TABLE IF NOT EXISTS teachers (
         REFERENCES programs (id, level)
 );
 
--- Acronyms are unique after trimming and case normalization.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_acronym_normalized
-    ON teachers (lower(btrim(acronym)));
+-- Department-aware teacher identity: (normalized_acronym, normalized_department) must be unique.
+-- Same acronym is allowed in different departments, but must be unique within a department.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_acronym_department_normalized
+    ON teachers (lower(btrim(acronym)), lower(btrim(department)));
+
+-- Efficient department-based lookups.
+CREATE INDEX IF NOT EXISTS idx_teachers_department_normalized
+    ON teachers (lower(btrim(department)));
 
 -- Efficient case-insensitive name search.
 CREATE INDEX IF NOT EXISTS idx_teachers_name_normalized

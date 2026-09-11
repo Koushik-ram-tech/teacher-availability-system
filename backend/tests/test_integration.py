@@ -565,3 +565,460 @@ def test_integration_deferred_trigger_rejects_overlapping_confirmed(pg_db: Sessi
 
     finally:
         _delete_test_teacher(pg_db, teacher_id)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Department-Aware Teacher Identity Constraint Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="function")
+def apply_department_aware_migration(pg_db: Session) -> Generator[None, None, None]:
+    """Apply Phase 4 migration before department-aware tests.
+    
+    This fixture ensures the database has the new department-aware constraint.
+    It's safe to run multiple times (uses IF NOT EXISTS / IF EXISTS).
+    """
+    # Check if migration is needed
+    result = pg_db.execute(sa.text(
+        "SELECT 1 FROM pg_indexes WHERE indexname = 'uq_teachers_acronym_department_normalized'"
+    )).first()
+    
+    if result is None:
+        # Apply the migration
+        pg_db.execute(sa.text("DROP INDEX IF EXISTS uq_teachers_acronym_normalized"))
+        pg_db.execute(sa.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_acronym_department_normalized "
+            "ON teachers (lower(btrim(acronym)), lower(btrim(department)))"
+        ))
+        pg_db.execute(sa.text(
+            "CREATE INDEX IF NOT EXISTS idx_teachers_department_normalized "
+            "ON teachers (lower(btrim(department)))"
+        ))
+        pg_db.commit()
+    yield
+    # No rollback - migration should stay applied
+
+
+@pytest.mark.integration
+def test_department_aware_constraint_allows_same_acronym_different_departments(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """Database constraint allows same acronym in different departments.
+    
+    This test proves the uq_teachers_acronym_department_normalized constraint
+    works correctly at the database level, not just application validation.
+    """
+    from app.models.models import Program, Teacher
+    
+    suffix = uuid.uuid4().hex[:8]
+    program_name = f"TEST_CONSTRAINT_PROGRAM_{suffix}"
+    acronym = f"TC{suffix[:4]}"  # Unique acronym for this test run
+    
+    try:
+        # Create test program
+        program = Program(name=program_name, level="UG")
+        pg_db.add(program)
+        pg_db.commit()
+        
+        # Create first teacher: TC in Computer Applications
+        teacher1 = Teacher(
+            name="Dr. Smith",
+            acronym=acronym,
+            department="Computer Applications",
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher1)
+        pg_db.commit()
+        
+        # Create second teacher: TC in Mathematics
+        # This MUST succeed if department-aware constraint is active
+        teacher2 = Teacher(
+            name="Dr. Singh",
+            acronym=acronym,
+            department="Mathematics",
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher2)
+        pg_db.commit()  # Should NOT raise IntegrityError
+        
+        # Verify both exist
+        teachers = pg_db.query(Teacher).filter(
+            Teacher.acronym == acronym
+        ).all()
+        assert len(teachers) == 2
+        assert {t.department for t in teachers} == {"Computer Applications", "Mathematics"}
+        
+    finally:
+        # Cleanup
+        pg_db.rollback()  # Clear any pending state
+        pg_db.query(Teacher).filter(Teacher.acronym == acronym).delete()
+        pg_db.query(Program).filter(Program.name == program_name).delete()
+        pg_db.commit()
+
+
+@pytest.mark.integration
+def test_department_aware_constraint_rejects_same_acronym_same_department(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """Database constraint rejects duplicate (acronym, department) tuple.
+    
+    This test proves the constraint enforces uniqueness within a department.
+    """
+    from app.models.models import Program, Teacher
+    from sqlalchemy.exc import IntegrityError
+    
+    suffix = uuid.uuid4().hex[:8]
+    program_name = f"TEST_CONSTRAINT_PROGRAM_{suffix}"
+    acronym = f"TR{suffix[:4]}"  # Unique acronym for this test run
+    
+    try:
+        # Create test program
+        program = Program(name=program_name, level="UG")
+        pg_db.add(program)
+        pg_db.commit()
+        
+        # Create first teacher: TR in Computer Applications
+        teacher1 = Teacher(
+            name="Dr. Smith",
+            acronym=acronym,
+            department="Computer Applications",
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher1)
+        pg_db.commit()
+        
+        # Attempt to create duplicate: TR in Computer Applications (different name)
+        # This MUST fail with IntegrityError
+        teacher2 = Teacher(
+            name="Dr. Different",
+            acronym=acronym,
+            department="Computer Applications",  # Same department!
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher2)
+        
+        with pytest.raises(IntegrityError) as exc_info:
+            pg_db.commit()
+        
+        # Verify the constraint name
+        assert "uq_teachers_acronym_department_normalized" in str(exc_info.value).lower()
+        
+    finally:
+        # Cleanup (rollback the failed transaction first)
+        pg_db.rollback()
+        pg_db.query(Teacher).filter(Teacher.acronym == acronym).delete()
+        pg_db.query(Program).filter(Program.name == program_name).delete()
+        pg_db.commit()
+
+
+@pytest.mark.integration
+def test_department_aware_constraint_case_insensitive(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """Database constraint is case-insensitive for both acronym and department.
+    
+    This test proves lower() normalization works in the constraint.
+    """
+    from app.models.models import Program, Teacher
+    from sqlalchemy.exc import IntegrityError
+    
+    suffix = uuid.uuid4().hex[:8]
+    program_name = f"TEST_CONSTRAINT_PROGRAM_{suffix}"
+    acronym = f"TI{suffix[:4]}"  # Unique acronym for this test run
+    
+    try:
+        # Create test program
+        program = Program(name=program_name, level="UG")
+        pg_db.add(program)
+        pg_db.commit()
+        
+        # Create first teacher: ti in computer applications (lowercase)
+        teacher1 = Teacher(
+            name="Dr. Lower",
+            acronym=acronym.lower(),
+            department="computer applications",
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher1)
+        pg_db.commit()
+        
+        # Attempt to create: TI in Computer Applications (uppercase)
+        # Should fail because constraint normalizes with lower()
+        teacher2 = Teacher(
+            name="Dr. Upper",
+            acronym=acronym.upper(),
+            department="Computer Applications",
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher2)
+        
+        with pytest.raises(IntegrityError) as exc_info:
+            pg_db.commit()
+        
+        assert "uq_teachers_acronym_department_normalized" in str(exc_info.value).lower()
+        
+        # Rollback and verify different department allows it
+        pg_db.rollback()
+        teacher3 = Teacher(
+            name="Dr. Different Dept",
+            acronym=acronym.upper(),
+            department="Mathematics",  # Different department
+            level="UG",
+            program_id=program.id,
+            semester=1,
+        )
+        pg_db.add(teacher3)
+        pg_db.commit()  # Should succeed
+        
+        # Verify both exist with different departments
+        teachers = pg_db.query(Teacher).filter(
+            Teacher.acronym.ilike(acronym)
+        ).all()
+        assert len(teachers) == 2
+        depts = {t.department.lower() for t in teachers}
+        assert depts == {"computer applications", "mathematics"}
+        
+    finally:
+        # Cleanup
+        pg_db.rollback()  # Clear any pending state
+        pg_db.query(Teacher).filter(Teacher.acronym.ilike(acronym)).delete()
+        pg_db.query(Program).filter(Program.name == program_name).delete()
+        pg_db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Department-Aware Teacher API Integration Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_api_create_same_acronym_different_departments(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """POST /api/v1/teachers allows same acronym in different departments.
+    
+    This test verifies the Teacher API correctly handles department-aware identity
+    at the HTTP layer, not just database layer.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    acronym = f"TA{suffix[:4]}".upper()  # API normalizes to uppercase
+    
+    # Get an active program
+    program = _get_active_program(pg_db)
+    
+    try:
+        # Clean up any existing test data first
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()
+        
+        # Create first teacher: TA in Computer Applications
+        resp1 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. API Test One",
+                "acronym": acronym,
+                "department": "Computer Applications",
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        assert resp1.status_code == 201, resp1.text
+        teacher1_id = resp1.json()["id"]
+        
+        # Create second teacher: same acronym in Mathematics
+        # This MUST succeed via API
+        resp2 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. API Test Two",
+                "acronym": acronym,
+                "department": "Mathematics",
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        assert resp2.status_code == 201, resp2.text
+        teacher2_id = resp2.json()["id"]
+        
+        # Verify both exist with correct departments
+        from app.models.models import Teacher
+        teachers = pg_db.query(Teacher).filter(Teacher.acronym == acronym).all()
+        assert len(teachers) == 2
+        assert {t.department for t in teachers} == {"Computer Applications", "Mathematics"}
+        
+    finally:
+        # Cleanup via SQL (direct delete)
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()
+
+
+@pytest.mark.integration
+def test_api_create_same_acronym_same_department_conflict(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """POST /api/v1/teachers rejects duplicate (acronym, department) with 409.
+    
+    This test verifies the API returns the correct HTTP status and error message
+    when attempting to create a duplicate teacher identity.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    acronym = f"TB{suffix[:4]}".upper()  # API normalizes to uppercase
+    department = "Computer Applications"
+    
+    # Get an active program
+    program = _get_active_program(pg_db)
+    
+    try:
+        # Clean up any existing test data first
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()
+        
+        # Create first teacher
+        resp1 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. First",
+                "acronym": acronym,
+                "department": department,
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        assert resp1.status_code == 201, resp1.text
+        
+        # Attempt to create duplicate (same acronym, same department)
+        resp2 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. Duplicate",
+                "acronym": acronym,
+                "department": department,  # Same department!
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        
+        # Verify proper HTTP error
+        assert resp2.status_code == 409, resp2.text
+        error_detail = resp2.json()["detail"]
+        assert acronym in error_detail
+        assert department in error_detail
+        assert "already exists" in error_detail.lower()
+        
+    finally:
+        # Cleanup
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()
+
+
+@pytest.mark.integration
+def test_api_search_with_department_filter(
+    pg_db: Session, pg_client: TestClient, apply_department_aware_migration
+) -> None:
+    """GET /api/v1/teachers/search supports department filtering.
+    
+    This test verifies the search endpoint correctly filters by department
+    and returns only teachers from the specified department.
+    """
+    suffix = uuid.uuid4().hex[:8]
+    acronym = f"TS{suffix[:4]}".upper()  # API normalizes to uppercase
+    
+    # Get an active program
+    program = _get_active_program(pg_db)
+    
+    try:
+        # Clean up any existing test data first
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()
+        
+        # Create two teachers with same acronym in different departments
+        resp1 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. CompSci",
+                "acronym": acronym,
+                "department": "Computer Science",
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        assert resp1.status_code == 201, resp1.text
+        teacher1 = resp1.json()
+        
+        resp2 = pg_client.post(
+            "/api/v1/teachers",
+            json={
+                "name": "Dr. Math",
+                "acronym": acronym,
+                "department": "Mathematics",
+                "level": program["level"],
+                "program_id": str(program["id"]),
+                "semester": 1,
+            },
+        )
+        assert resp2.status_code == 201, resp2.text
+        teacher2 = resp2.json()
+        
+        # Search without department filter - should find both
+        resp_all = pg_client.get(f"/api/v1/teachers/search?q={acronym}")
+        assert resp_all.status_code == 200, resp_all.text
+        all_teachers = resp_all.json()
+        # Filter to our test teachers only
+        all_test_teachers = [t for t in all_teachers if t["acronym"] == acronym]
+        assert len(all_test_teachers) == 2
+        
+        # Search with Computer Science department filter - should find only Dr. CompSci
+        resp_cs = pg_client.get(
+            f"/api/v1/teachers/search?q={acronym}&department=Computer Science"
+        )
+        assert resp_cs.status_code == 200, resp_cs.text
+        cs_teachers = resp_cs.json()
+        # Filter to our test teachers only
+        cs_test_teachers = [t for t in cs_teachers if t["acronym"] == acronym]
+        assert len(cs_test_teachers) == 1
+        assert cs_test_teachers[0]["department"] == "Computer Science"
+        assert cs_test_teachers[0]["name"] == "Dr. CompSci"
+        
+        # Search with Mathematics department filter - should find only Dr. Math
+        resp_math = pg_client.get(
+            f"/api/v1/teachers/search?q={acronym}&department=Mathematics"
+        )
+        assert resp_math.status_code == 200, resp_math.text
+        math_teachers = resp_math.json()
+        # Filter to our test teachers only
+        math_test_teachers = [t for t in math_teachers if t["acronym"] == acronym]
+        assert len(math_test_teachers) == 1
+        assert math_test_teachers[0]["department"] == "Mathematics"
+        assert math_test_teachers[0]["name"] == "Dr. Math"
+        
+        # Search with non-existent department - should find none of our test teachers
+        resp_none = pg_client.get(
+            f"/api/v1/teachers/search?q={acronym}&department=Nonexistent Department"
+        )
+        assert resp_none.status_code == 200, resp_none.text
+        none_teachers = resp_none.json()
+        none_test_teachers = [t for t in none_teachers if t["acronym"] == acronym]
+        assert len(none_test_teachers) == 0
+        
+    finally:
+        # Cleanup
+        pg_db.execute(sa.text("DELETE FROM teachers WHERE acronym = :acr"), {"acr": acronym})
+        pg_db.commit()

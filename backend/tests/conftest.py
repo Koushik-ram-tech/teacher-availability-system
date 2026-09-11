@@ -59,6 +59,10 @@ _SQLITE_DDL_STATEMENTS = [
         created_at TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT ''
     )""",
+    # SQLite doesn't support expression-based UNIQUE constraints in CREATE TABLE
+    # Create unique index separately to enforce (normalized_acronym, normalized_department)
+    """CREATE UNIQUE INDEX IF NOT EXISTS uq_teachers_acronym_department_normalized
+        ON teachers (lower(trim(acronym)), lower(trim(department)))""",
     """CREATE TABLE IF NOT EXISTS time_slots (
         id TEXT PRIMARY KEY,
         code TEXT NOT NULL UNIQUE,

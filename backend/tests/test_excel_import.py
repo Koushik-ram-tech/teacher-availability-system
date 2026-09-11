@@ -300,7 +300,7 @@ class TestNormalizerTeachers:
             _make_teacher_raw(acronym="tt", name="Other"),  # same normalised acronym
         ])
         preview = normalize(raw)
-        assert any("duplicate acronym" in e for e in preview.errors)
+        assert any("duplicate teacher identity" in e for e in preview.errors)
 
     def test_invalid_level(self) -> None:
         raw = _raw(teacher_rows=[_make_teacher_raw(level="INVALID")])
@@ -417,7 +417,7 @@ class TestNormalizerSchedule:
             schedule_rows=[_make_schedule_raw(acronym="ZZZ")],
         )
         preview = normalize(raw)
-        assert any("Unknown teacher acronym" in e for e in preview.errors)
+        assert any("not found in Teachers sheet" in e for e in preview.errors)
 
     def test_invalid_day(self) -> None:
         raw = _raw(

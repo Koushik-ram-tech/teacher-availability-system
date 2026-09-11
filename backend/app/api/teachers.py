@@ -71,6 +71,13 @@ def create_teacher(payload: TeacherCreate, db: Session = Depends(get_db)) -> Tea
     except IntegrityError as exc:
         db.rollback()
         constraint = _get_constraint_name(exc)
+        # Department-aware uniqueness: same acronym allowed in different departments
+        if constraint == "uq_teachers_acronym_department_normalized":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A teacher with acronym '{payload.acronym}' already exists in department '{payload.department}'",
+            ) from exc
+        # Legacy constraint name (for backward compatibility during migration)
         if constraint == "uq_teachers_acronym_normalized":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -104,6 +111,7 @@ def list_teachers(db: Session = Depends(get_db)) -> list[Teacher]:
 @router.get("/search", response_model=list[TeacherOut])
 def search_teachers(
     q: str = Query(min_length=1, max_length=100),
+    department: str | None = Query(None, description="Optional department filter"),
     db: Session = Depends(get_db),
 ) -> list[Teacher]:
     term = q.strip()
@@ -117,9 +125,13 @@ def search_teachers(
             Teacher.is_active.is_(True),
             (Teacher.name.ilike(pattern) | Teacher.acronym.ilike(pattern)),
         )
-        .order_by(Teacher.name)
-        .limit(25)
     )
+    # Optional department filter
+    if department:
+        dept = department.strip()
+        stmt = stmt.where(Teacher.department.ilike(dept))
+    
+    stmt = stmt.order_by(Teacher.name).limit(25)
     return list(db.scalars(stmt).all())
 
 

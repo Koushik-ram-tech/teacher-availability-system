@@ -70,11 +70,15 @@ def resolve_and_validate(preview: ImportPreview, db: Session) -> ImportPreview:
                 )
 
         # ---------------------------------------------------------------- #
-        # 2. Check for existing teacher with same normalised acronym        #
+        # 2. Check for existing teacher with same (normalized acronym, department)
+        #    Department is now part of teacher identity.
         # ---------------------------------------------------------------- #
         existing: Teacher | None = (
             db.query(Teacher)
-            .filter(func.lower(Teacher.acronym) == t.acronym.lower())
+            .filter(
+                func.lower(Teacher.acronym) == t.acronym.lower(),
+                func.lower(Teacher.department) == t.department.lower(),
+            )
             .first()
         )
 
@@ -97,11 +101,13 @@ def resolve_and_validate(preview: ImportPreview, db: Session) -> ImportPreview:
                 conflicts.append(
                     f"program_id (DB: '{existing.program_id}')"
                 )
+            # Department is part of identity, but already matched in query
+            # If department differed, existing would be None
 
             if conflicts:
                 row_errors.append(
-                    f"{t.row_ref}: Teacher '{t.acronym}' already exists in DB with "
-                    f"conflicting identity fields: {'; '.join(conflicts)}. "
+                    f"{t.row_ref}: Teacher '{t.acronym}' in department '{t.department}' "
+                    f"already exists in DB with conflicting identity fields: {'; '.join(conflicts)}. "
                     "Correct the workbook or DB before importing."
                 )
                 action = "CONFLICT"
@@ -123,16 +129,22 @@ def resolve_and_validate(preview: ImportPreview, db: Session) -> ImportPreview:
     # -------------------------------------------------------------------- #
     # Propagate CONFLICT errors to affected schedule rows                   #
     # -------------------------------------------------------------------- #
-    conflict_acronyms: set[str] = {
-        t.acronym for t in updated_teachers if t.action == "CONFLICT"
+    # Build set of conflicted (acronym, department) pairs
+    conflict_identities: set[tuple[str, str]] = {
+        (t.acronym, t.department.upper()) for t in updated_teachers if t.action == "CONFLICT"
     }
-    if conflict_acronyms:
+    if conflict_identities:
         for day_rows in preview.days.values():
             for row in day_rows:
-                if row.teacher_acronym in conflict_acronyms:
+                # Find the teacher for this schedule row
+                teacher = next(
+                    (t for t in updated_teachers if t.acronym == row.teacher_acronym),
+                    None
+                )
+                if teacher and (teacher.acronym, teacher.department.upper()) in conflict_identities:
                     errors.append(
                         f"{row.row_refs[0]}: Cannot import — teacher "
-                        f"'{row.teacher_acronym}' has a conflicting DB identity."
+                        f"'{row.teacher_acronym}' (department '{teacher.department}') has a conflicting DB identity."
                     )
 
     return preview.model_copy(
