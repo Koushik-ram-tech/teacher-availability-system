@@ -25,20 +25,26 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.domain.converters import canonical_to_import_preview, import_preview_to_canonical
+from app.domain.timetable import CanonicalTimetable
+from app.domain.validation import validate_canonical
 from app.schemas.imports import ImportConfirmOut, ImportPreview
 from app.services.excel_import.normalizer import normalize
 from app.services.excel_import.parser import ParseError, parse_workbook
 from app.services.excel_import.persister import PersistenceError, persist_import
-from app.services.excel_import.validator import resolve_and_validate
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 # ---------------------------------------------------------------------------
 # In-memory staging store
 # ---------------------------------------------------------------------------
-# Maps import_id (UUID string) → ImportPreview.
+# Maps import_id (UUID string) → CanonicalTimetable.
 # Cleared on app restart — this is by design for the prototype.
-_STAGING: dict[str, ImportPreview] = {}
+# 
+# DESIGN NOTE: We store the canonical representation, not ImportPreview.
+# This allows future DOCX/Editor sources to use the same staging mechanism.
+# ImportPreview is derived on-demand for API responses.
+_STAGING: dict[str, CanonicalTimetable] = {}
 
 MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
@@ -102,16 +108,20 @@ async def upload_excel(
             detail=str(exc),
         ) from exc
 
-    # --- Normalise (syntax + rule validation, no DB) ---
+    # --- Normalise (syntax + basic rule validation, no DB) ---
     preview = normalize(raw)
 
-    # --- DB-level validation (program + teacher resolution) ---
-    preview = resolve_and_validate(preview, db)
+    # --- Convert to canonical domain model ---
+    canonical = import_preview_to_canonical(preview)
 
-    # --- Stage ---
-    _STAGING[preview.import_id] = preview
+    # --- Validate against domain rules and DB state ---
+    canonical = validate_canonical(canonical, db)
 
-    return preview
+    # --- Stage canonical representation ---
+    _STAGING[canonical.import_id] = canonical
+
+    # --- Convert to ImportPreview for API response ---
+    return canonical_to_import_preview(canonical)
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +136,8 @@ async def upload_excel(
 )
 def get_import(import_id: str) -> ImportPreview:
     """Return the staged import preview identified by *import_id*."""
-    preview = _STAGING.get(import_id)
-    if preview is None:
+    canonical = _STAGING.get(import_id)
+    if canonical is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
@@ -135,7 +145,8 @@ def get_import(import_id: str) -> ImportPreview:
                 "It may have expired, been confirmed, or never existed."
             ),
         )
-    return preview
+    # Convert canonical to preview for API response
+    return canonical_to_import_preview(canonical)
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +193,8 @@ def confirm_import(
     - Rolls back **all** changes if any step fails.
     - Removes the staging entry on success.
     """
-    preview = _STAGING.get(import_id)
-    if preview is None:
+    canonical = _STAGING.get(import_id)
+    if canonical is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
@@ -193,10 +204,12 @@ def confirm_import(
         )
 
     # Re-validate against current DB (state may have changed since upload)
-    preview = resolve_and_validate(preview, db)
+    canonical = validate_canonical(canonical, db)
 
     # Block on any errors
-    if preview.errors:
+    if canonical.has_errors():
+        # Convert to preview for error response
+        preview = canonical_to_import_preview(canonical)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
@@ -204,6 +217,9 @@ def confirm_import(
                 "errors": preview.errors,
             },
         )
+
+    # Convert to preview for persistence (persister expects ImportPreview)
+    preview = canonical_to_import_preview(canonical)
 
     # Persist (all flushes; caller session commits at the end)
     try:

@@ -67,6 +67,24 @@ _SQLITE_DDL_STATEMENTS = [
         sequence INTEGER NOT NULL UNIQUE,
         is_active INTEGER NOT NULL DEFAULT 1
     )""",
+    """CREATE TABLE IF NOT EXISTS resources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        department TEXT,
+        capacity INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+    )""",
+    """CREATE TABLE IF NOT EXISTS resource_aliases (
+        id TEXT PRIMARY KEY,
+        resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL,
+        normalized_alias TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT ''
+    )""",
     """CREATE TABLE IF NOT EXISTS timetables (
         id TEXT PRIMARY KEY,
         teacher_id TEXT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
@@ -87,6 +105,7 @@ _SQLITE_DDL_STATEMENTS = [
         subject_or_activity TEXT NOT NULL,
         section TEXT,
         room TEXT,
+        resource_id TEXT REFERENCES resources(id),
         notes TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS schedule_entry_slots (

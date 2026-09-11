@@ -89,9 +89,11 @@ class ScheduleEntry(Base):
     section: Mapped[Optional[str]] = mapped_column(String)
     room: Mapped[Optional[str]] = mapped_column(String)
     notes: Mapped[Optional[str]] = mapped_column(String)
+    resource_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resources.id"), nullable=True)
 
     timetable: Mapped[Timetable] = relationship(back_populates="entries")
     slot_links: Mapped[list["ScheduleEntrySlot"]] = relationship(back_populates="schedule_entry", cascade="all, delete-orphan")
+    resource: Mapped[Optional["Resource"]] = relationship(back_populates="schedule_entries")
 
 
 class ScheduleEntrySlot(Base):
@@ -102,3 +104,42 @@ class ScheduleEntrySlot(Base):
 
     schedule_entry: Mapped[ScheduleEntry] = relationship(back_populates="slot_links")
     time_slot: Mapped[TimeSlot] = relationship(back_populates="entry_links")
+
+
+class Resource(Base):
+    __tablename__ = "resources"
+    __table_args__ = (
+        CheckConstraint("resource_type IN ('LAB', 'CLASSROOM', 'SEMINAR_HALL', 'AUDITORIUM', 'OTHER')", name="resources_resource_type_check"),
+        CheckConstraint("btrim(name) <> ''", name="resources_name_not_blank"),
+        CheckConstraint("btrim(normalized_name) <> ''", name="resources_normalized_name_not_blank"),
+        CheckConstraint("capacity IS NULL OR capacity > 0", name="resources_capacity_positive"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String, nullable=False)
+    resource_type: Mapped[str] = mapped_column(String, nullable=False)
+    department: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # NULL = shared
+    capacity: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    aliases: Mapped[list["ResourceAlias"]] = relationship(back_populates="resource", cascade="all, delete-orphan")
+    schedule_entries: Mapped[list[ScheduleEntry]] = relationship(back_populates="resource")
+
+
+class ResourceAlias(Base):
+    __tablename__ = "resource_aliases"
+    __table_args__ = (
+        CheckConstraint("btrim(alias) <> ''", name="resource_aliases_alias_not_blank"),
+        CheckConstraint("btrim(normalized_alias) <> ''", name="resource_aliases_normalized_alias_not_blank"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    resource_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resources.id", ondelete="CASCADE"), nullable=False)
+    alias: Mapped[str] = mapped_column(String, nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    resource: Mapped[Resource] = relationship(back_populates="aliases")
