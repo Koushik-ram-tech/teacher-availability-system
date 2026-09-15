@@ -141,3 +141,110 @@ export async function confirmImport(importId: string): Promise<ImportConfirmResu
 export async function deleteImport(importId: string): Promise<void> {
   await api.delete(`/imports/${importId}`);
 }
+
+// ---------------------------------------------------------------------------
+// DOCX Import API
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a .docx timetable for parsing + validation.
+ * Returns a DOCXImportPreview with resolved/unresolved blocks.
+ *
+ * @param file          The .docx file selected by the user.
+ * @param academicYear  Academic year string (e.g. "2026-Odd")
+ * @param department    Department name (e.g. "Computer Applications")
+ */
+export async function uploadDOCX(
+  file: File,
+  academicYear: string,
+  department: string,
+): Promise<import('../types').DOCXImportPreview> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('academic_year', academicYear.trim());
+  form.append('department', department.trim());
+  const response = await api.post<import('../types').DOCXImportPreview>('/imports/docx', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30_000,
+  });
+  return response.data;
+}
+
+/**
+ * Apply manual resolution to unresolved blocks.
+ * Multiple resolutions may reference the same block_id.
+ */
+export async function resolveDOCXBlocks(
+  importId: string,
+  resolutions: import('../types').DOCXManualResolutionInput[],
+): Promise<import('../types').DOCXManualResolutionResult> {
+  const response = await api.post<import('../types').DOCXManualResolutionResult>(
+    `/imports/${importId}/resolve`,
+    { resolutions },
+  );
+  return response.data;
+}
+
+/**
+ * Finalize blocks (mark as complete or excluded).
+ * After finalization, blocks are removed from unresolved_blocks.
+ */
+export async function finalizeDOCXBlocks(
+  importId: string,
+  blockIds: string[],
+): Promise<import('../types').DOCXImportPreview> {
+  const response = await api.post<import('../types').DOCXImportPreview>(
+    `/imports/${importId}/finalize`,
+    { block_ids: blockIds },
+  );
+  return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Availability API
+// ---------------------------------------------------------------------------
+
+/**
+ * Get teacher availability for an academic year.
+ * Returns availability grid (Mon-Sat × S1-S9) with FREE/OCCUPIED status.
+ */
+export async function getTeacherAvailability(
+  teacherId: string,
+  academicYear: string,
+  day?: string,
+): Promise<import('../types').TeacherAvailability> {
+  const response = await api.get<import('../types').TeacherAvailability>(
+    `/availability/teachers/${teacherId}`,
+    { params: { academic_year: academicYear, ...(day && { day }) } },
+  );
+  return response.data;
+}
+
+/**
+ * Get resource availability by resource ID.
+ */
+export async function getResourceAvailability(
+  resourceId: string,
+  academicYear: string,
+): Promise<import('../types').ResourceAvailability> {
+  const response = await api.get<import('../types').ResourceAvailability>(
+    `/availability/resources/${resourceId}`,
+    { params: { academic_year: academicYear } },
+  );
+  return response.data;
+}
+
+/**
+ * Get resource availability by resource code (e.g., "LAB1A", "LAB 1A").
+ * Normalizes code and resolves aliases.
+ */
+export async function getResourceAvailabilityByCode(
+  code: string,
+  academicYear: string,
+): Promise<import('../types').ResourceAvailability> {
+  const response = await api.get<import('../types').ResourceAvailability>(
+    `/availability/resources/by-code/${encodeURIComponent(code)}`,
+    { params: { academic_year: academicYear } },
+  );
+  return response.data;
+}

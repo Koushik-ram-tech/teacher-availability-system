@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.api import staging
 from app.domain.converters import canonical_to_import_preview, import_preview_to_canonical
 from app.domain.timetable import CanonicalTimetable
 from app.domain.validation import validate_canonical
@@ -36,15 +37,8 @@ from app.services.excel_import.persister import PersistenceError, persist_import
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 # ---------------------------------------------------------------------------
-# In-memory staging store
+# Shared staging stores (imported from shared module)
 # ---------------------------------------------------------------------------
-# Maps import_id (UUID string) → CanonicalTimetable.
-# Cleared on app restart — this is by design for the prototype.
-# 
-# DESIGN NOTE: We store the canonical representation, not ImportPreview.
-# This allows future DOCX/Editor sources to use the same staging mechanism.
-# ImportPreview is derived on-demand for API responses.
-_STAGING: dict[str, CanonicalTimetable] = {}
 
 MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
@@ -118,7 +112,7 @@ async def upload_excel(
     canonical = validate_canonical(canonical, db)
 
     # --- Stage canonical representation ---
-    _STAGING[canonical.import_id] = canonical
+    staging.stage_canonical(canonical.import_id, canonical)
 
     # --- Convert to ImportPreview for API response ---
     return canonical_to_import_preview(canonical)
@@ -136,7 +130,7 @@ async def upload_excel(
 )
 def get_import(import_id: str) -> ImportPreview:
     """Return the staged import preview identified by *import_id*."""
-    canonical = _STAGING.get(import_id)
+    canonical = staging.get_canonical(import_id)
     if canonical is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -161,12 +155,13 @@ def get_import(import_id: str) -> ImportPreview:
 )
 def delete_import(import_id: str) -> None:
     """Discard a staged import without persisting it."""
-    if import_id not in _STAGING:
+    if not staging.has_import(import_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Import '{import_id}' not found.",
         )
-    del _STAGING[import_id]
+    staging.remove_canonical(import_id)
+    staging.remove_docx_preview(import_id)
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +179,9 @@ def confirm_import(
     db: Session = Depends(get_db),
 ) -> ImportConfirmOut:
     """
-    Persist a staged import.
+    Persist a staged import (XLSX or DOCX).
 
+    - For DOCX: checks that all required blocks are resolved, converts to canonical
     - Re-validates against current DB state.
     - Rejects if any errors remain.
     - Creates/reuses teachers and creates DRAFT timetables in **one transaction**.
@@ -193,15 +189,54 @@ def confirm_import(
     - Rolls back **all** changes if any step fails.
     - Removes the staging entry on success.
     """
-    canonical = _STAGING.get(import_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Import '{import_id}' not found. "
-                "It may have expired, been confirmed, or never existed."
-            ),
-        )
+    # --- Check if this is a DOCX import ---
+    docx_preview = staging.get_docx_preview(import_id)
+
+    if docx_preview is not None:
+        # DOCX workflow: must resolve/finalize all blocks first
+        if not docx_preview.can_convert_to_canonical():
+            unresolved_required = [
+                block for block in docx_preview.unresolved_blocks
+                if block.resolution_required
+            ]
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": f"{len(unresolved_required)} required unresolved blocks remain. Apply manual resolution or finalize blocks before confirming.",
+                    "unresolved_blocks": [
+                        {
+                            "block_id": block.block_id,
+                            "day": block.day,
+                            "section": block.section,
+                            "slots": block.slots,
+                            "reason": block.ambiguity_reason,
+                        }
+                        for block in unresolved_required
+                    ],
+                },
+            )
+
+        # Convert DOCX preview to canonical
+        from app.domain.docx_converters import docx_preview_to_canonical
+
+        try:
+            canonical = docx_preview_to_canonical(docx_preview)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Canonical conversion failed: {str(exc)}",
+            ) from exc
+    else:
+        # XLSX workflow: canonical already staged
+        canonical = staging.get_canonical(import_id)
+        if canonical is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"Import '{import_id}' not found. "
+                    "It may have expired, been confirmed, or never existed."
+                ),
+            )
 
     # Re-validate against current DB (state may have changed since upload)
     canonical = validate_canonical(canonical, db)
@@ -242,7 +277,8 @@ def confirm_import(
         ) from exc
 
     # Remove from staging on success
-    _STAGING.pop(import_id, None)
+    staging.remove_canonical(import_id)
+    staging.remove_docx_preview(import_id)
 
     return ImportConfirmOut(
         import_id=import_id,

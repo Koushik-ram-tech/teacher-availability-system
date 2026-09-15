@@ -341,3 +341,143 @@ export interface TimetableConfirmResponse {
   confirmed_at: string;   // ISO-8601 UTC timestamp (last_verified_at)
   entry_count: number;
 }
+
+// ---------------------------------------------------------------------------
+// DOCX Import API types
+// ---------------------------------------------------------------------------
+
+/** Activity candidate from DOCX parser */
+export interface DOCXActivityCandidate {
+  code: string;
+  description?: string | null;
+}
+
+/** Teacher candidate from DOCX parser */
+export interface DOCXTeacherCandidate {
+  acronym: string;
+  name?: string | null;
+}
+
+/** Resource candidate from DOCX parser */
+export interface DOCXResourceCandidate {
+  code: string;
+  type?: string | null;
+}
+
+/** Unresolved timetable block requiring manual resolution */
+export interface DOCXUnresolvedBlock {
+  block_id: string;
+  day: string;
+  section: string;
+  slots: string[];
+  source_location: string;
+  table_row?: number | null;
+  table_col?: number | null;
+  activity_candidates: DOCXActivityCandidate[];
+  teacher_candidates: DOCXTeacherCandidate[];
+  resource_candidates: DOCXResourceCandidate[];
+  ambiguity_reason: string;
+  resolution_required: boolean;
+}
+
+/** Resolved activity from DOCX parser */
+export interface DOCXResolvedActivity {
+  day: string;
+  section: string;
+  slots: string[];
+  teacher_acronym: string;
+  subject_or_activity: string;
+  resource_code?: string | null;
+  source_location: string;
+  entry_type: string;
+  is_multi_slot: boolean;
+  is_manually_resolved: boolean;
+}
+
+/** Faculty legend entry from DOCX */
+export interface DOCXFacultyLegendEntry {
+  acronym: string;
+  full_name: string;
+}
+
+/** Parser issue from DOCX parsing */
+export interface DOCXParserIssue {
+  severity: string; // 'ERROR' | 'WARNING'
+  code: string;
+  message: string;
+  source_location?: string | null;
+  affected_entities: Record<string, string>;
+}
+
+/** Full DOCX import preview */
+export interface DOCXImportPreview {
+  import_id: string;
+  filename: string;
+  academic_year: string;
+  department: string;
+  parser_status: string; // 'COMPLETE' | 'PARTIAL' | 'FAILED'
+  physical_structure: Record<string, number | string>;
+  total_blocks: number;
+  resolved_count: number;
+  unresolved_count: number;
+  manually_resolved_count: number;
+  faculty_legend: DOCXFacultyLegendEntry[];
+  resolved_activities: DOCXResolvedActivity[];
+  unresolved_blocks: DOCXUnresolvedBlock[];
+  errors: DOCXParserIssue[];
+  warnings: DOCXParserIssue[];
+}
+
+/** Manual resolution input */
+export interface DOCXManualResolutionInput {
+  block_id: string;
+  selected_activity: string;
+  selected_teacher: string;
+  selected_resource?: string | null;
+  entry_type?: string;
+  notes?: string | null;
+}
+
+/** Manual resolution result */
+export interface DOCXManualResolutionResult {
+  applied_count: number;
+  remaining_unresolved: number;
+  new_resolved_activities: DOCXResolvedActivity[];
+  errors: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Availability API types
+// ---------------------------------------------------------------------------
+
+export type AvailabilityStatus = 'FREE' | 'OCCUPIED' | 'UNKNOWN';
+
+export interface SlotAvailability {
+  slot_code: string;
+  status: AvailabilityStatus;
+  subject_or_activity?: string | null;
+  section?: string | null;
+  room?: string | null;
+}
+
+export interface DayAvailability {
+  day: string;
+  slots: Record<string, SlotAvailability>;
+}
+
+export interface TeacherAvailability {
+  teacher_id: string;
+  teacher_name: string;
+  teacher_acronym: string;
+  teacher_department?: string | null;
+  academic_year: string;
+  days: Record<string, DayAvailability>;
+}
+
+export interface ResourceAvailability {
+  resource_id: string;
+  resource_name: string;
+  resource_type: string;
+  academic_year: string;
+  days: Record<string, DayAvailability>;
+}

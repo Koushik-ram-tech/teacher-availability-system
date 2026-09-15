@@ -56,8 +56,8 @@ _SQLITE_DDL_STATEMENTS = [
         semester INTEGER NOT NULL,
         department TEXT NOT NULL DEFAULT 'Prototype Department',
         is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""",
     # SQLite doesn't support expression-based UNIQUE constraints in CREATE TABLE
     # Create unique index separately to enforce (normalized_acronym, normalized_department)
@@ -79,15 +79,15 @@ _SQLITE_DDL_STATEMENTS = [
         department TEXT,
         capacity INTEGER,
         is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""",
     """CREATE TABLE IF NOT EXISTS resource_aliases (
         id TEXT PRIMARY KEY,
         resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
         alias TEXT NOT NULL,
         normalized_alias TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""",
     """CREATE TABLE IF NOT EXISTS timetables (
         id TEXT PRIMARY KEY,
@@ -98,8 +98,8 @@ _SQLITE_DDL_STATEMENTS = [
         status TEXT NOT NULL,
         source TEXT NOT NULL,
         last_verified_at TEXT,
-        created_at TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL DEFAULT ''
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""",
     """CREATE TABLE IF NOT EXISTS schedule_entries (
         id TEXT PRIMARY KEY,

@@ -8,6 +8,7 @@ Rules enforced here:
   - NEVER touches an existing CONFIRMED timetable.
   - Deletes and replaces the DRAFT timetable if one already exists.
   - Runs full TimetableWriteIn Pydantic validation before any DB writes.
+  - Automatically populates resources from room values and links schedule_entries.
   - The caller (API layer) is responsible for commit/rollback; this module
     only flushes within the session so all writes are in one transaction.
 
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.schedule_config import DAY_NAME_TO_ISO
 from app.models.models import (
     Program,
+    Resource,
     ScheduleEntry,
     ScheduleEntrySlot,
     Teacher,
@@ -33,6 +35,11 @@ from app.models.models import (
 )
 from app.schemas.imports import ImportPreview
 from app.schemas.timetable import ScheduleEntryIn, TimetableWriteIn
+from app.services.resource_populator import (
+    classify_resource_type,
+    find_or_create_resource,
+    create_alias_if_needed,
+)
 
 
 class PersistenceError(Exception):
@@ -42,6 +49,8 @@ class PersistenceError(Exception):
 def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     """
     Write all teachers and DRAFT timetables from *preview* to the database.
+
+    Automatically populates resources from room values and links schedule_entries.
 
     The caller must call ``db.commit()`` on success or ``db.rollback()`` on
     failure.  This function only calls ``db.flush()`` to obtain generated IDs.
@@ -53,12 +62,22 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
             "teachers_reused":     [str, ...],  # existing teacher UUIDs
             "timetables_created":  [str, ...],  # new timetable UUIDs
             "timetables_replaced": [str, ...],  # replaced DRAFT timetable UUIDs
+            "resources_created":   int,          # new resources created
+            "resources_reused":    int,          # existing resources reused
+            "entries_linked":      int,          # schedule_entries with resource_id set
         }
     """
     teachers_created: list[str] = []
     teachers_reused: list[str] = []
     timetables_created: list[str] = []
     timetables_replaced: list[str] = []
+    resources_created_count = 0
+    resources_reused_count = 0
+    entries_linked_count = 0
+
+    # Resource cache: {normalized_name: Resource}
+    # Prevents duplicate lookups/creations within same transaction
+    resource_cache: dict[str, Resource] = {}
 
     # ---------------------------------------------------------------------- #
     # Resolve time slots once (code → UUID)                                   #
@@ -204,7 +223,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
         # Persist schedule entries and slot links
         # Collect all slot objects for bulk insert at the end
         slot_objects: list[ScheduleEntrySlot] = []
-        
+
         for day_name, entries_in in validated.days.items():
             day_iso = DAY_NAME_TO_ISO[day_name]
             for entry_in in entries_in:
@@ -221,6 +240,64 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                 db.add(new_entry)
                 db.flush()
 
+                # --------------------------------------------------
+                # Resource Population Integration
+                # --------------------------------------------------
+                # If this entry has an explicit room value, resolve/create
+                # the resource and link it
+                if entry_in.room and entry_in.room.strip():
+                    room_name = entry_in.room.strip()
+
+                    # Check cache first
+                    from app.domain.resources import normalize_resource_name
+                    normalized = normalize_resource_name(room_name)
+
+                    if normalized in resource_cache:
+                        resource = resource_cache[normalized]
+                        resources_reused_count += 1
+                    else:
+                        # Check if resource already exists in DB
+                        existing_count = db.execute(
+                            select(func.count(Resource.id))
+                            .where(Resource.normalized_name == normalized)
+                            .where(Resource.department.is_(None))
+                        ).scalar()
+
+                        # Find or create resource
+                        resource_type = classify_resource_type(room_name)
+                        resource = find_or_create_resource(
+                            db=db,
+                            name=room_name,
+                            resource_type=resource_type,
+                            department=None,  # Shared resources
+                        )
+
+                        if existing_count == 0:
+                            resources_created_count += 1
+                        else:
+                            resources_reused_count += 1
+
+                        # Cache it
+                        resource_cache[normalized] = resource
+
+                        # Create common aliases (Lab1A <-> Lab 1A)
+                        import re
+                        if "lab" in room_name.lower():
+                            if " " not in room_name:
+                                # "Lab1A" -> create "Lab 1A" alias
+                                spaced = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', room_name)
+                                if spaced != room_name:
+                                    create_alias_if_needed(db, resource, spaced)
+                            else:
+                                # "Lab 1A" -> create "Lab1A" alias
+                                no_space = room_name.replace(" ", "")
+                                if no_space != room_name:
+                                    create_alias_if_needed(db, resource, no_space)
+
+                    # Link schedule_entry to resource
+                    new_entry.resource_id = resource.id
+                    entries_linked_count += 1
+
                 # Collect slot links for bulk insert
                 for code in entry_in.slot_ids:
                     ts_id = slot_code_to_id.get(code)
@@ -235,7 +312,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                             time_slot_id=ts_id,
                         )
                     )
-        
+
         # Bulk insert all slot links for this timetable
         if slot_objects:
             db.bulk_save_objects(slot_objects)
@@ -253,4 +330,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
         "teachers_reused": teachers_reused,
         "timetables_created": timetables_created,
         "timetables_replaced": timetables_replaced,
+        "resources_created": resources_created_count,
+        "resources_reused": resources_reused_count,
+        "entries_linked": entries_linked_count,
     }

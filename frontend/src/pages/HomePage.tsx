@@ -22,17 +22,11 @@ export function HomePage() {
           <strong> is this teacher free, and when?</strong>
         </p>
 
-        <div className="panel-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}>
-          <Link className="panel-card" to="/import">
-            <span className="panel-kicker">New workflow</span>
-            <h2>Import Timetable</h2>
-            <p>Upload an Excel workbook to create or update draft timetables for all teachers at once.</p>
-          </Link>
-
-          <Link className="panel-card" to="/teacher">
-            <span className="panel-kicker">Teacher</span>
-            <h2>Manage timetable</h2>
-            <p>Create a faculty profile and build the weekly schedule.</p>
+        <div className="panel-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0,1fr))', marginBottom: '2rem' }}>
+          <Link className="panel-card panel-card--primary" to="/availability">
+            <span className="panel-kicker">PRIMARY FEATURE</span>
+            <h2>Check Availability</h2>
+            <p>Find out if a teacher or classroom is free at any time — the core director-facing tool.</p>
           </Link>
 
           <Link className="panel-card" to="/director">
@@ -41,6 +35,29 @@ export function HomePage() {
             <p>Search faculty by name or acronym and inspect their schedule.</p>
           </Link>
         </div>
+
+        <details className="home-section-toggle">
+          <summary className="home-section-header">Data Management</summary>
+          <div className="panel-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))', marginTop: '1rem' }}>
+            <Link className="panel-card" to="/import">
+              <span className="panel-kicker">Excel Import</span>
+              <h2>Import Excel Timetable</h2>
+              <p>Upload an Excel workbook to create or update draft timetables for all teachers at once.</p>
+            </Link>
+
+            <Link className="panel-card" to="/import/docx">
+              <span className="panel-kicker">DOCX Import</span>
+              <h2>Import DOCX Timetable</h2>
+              <p>Upload a DOCX timetable document. Resolve ambiguities before saving.</p>
+            </Link>
+
+            <Link className="panel-card" to="/teacher">
+              <span className="panel-kicker">Teacher</span>
+              <h2>Manage timetable</h2>
+              <p>Create a faculty profile and build the weekly schedule.</p>
+            </Link>
+          </div>
+        </details>
       </section>
     </Shell>
   );

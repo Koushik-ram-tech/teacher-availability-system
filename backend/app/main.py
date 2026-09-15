@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.api.imports import router as imports_router
+from app.api.docx_imports import router as docx_imports_router
 from app.api.teachers import router as teachers_router
+from app.api.availability import router as availability_router
 from app.core.config import get_settings
 from app.db import get_db
 
@@ -26,6 +28,8 @@ app.add_middleware(
 
 app.include_router(teachers_router, prefix="/api/v1")
 app.include_router(imports_router, prefix="/api/v1")
+app.include_router(docx_imports_router, prefix="/api/v1")
+app.include_router(availability_router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")
