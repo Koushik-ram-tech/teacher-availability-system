@@ -66,19 +66,19 @@ def test_department_agnostic_mca():
     assert "LAB1A" in preview.resource_legend
 
     # Find block
-    assert len(preview.resolved_blocks) >= 2
+    assert len(preview.occupancy_ready_blocks) >= 2
 
-    blocks = sorted(preview.resolved_blocks, key=lambda b: b.slots[0])
+    blocks = sorted(preview.occupancy_ready_blocks, key=lambda b: b.slots[0])
     block1 = blocks[0]  # S2
     block2 = blocks[1]  # S3
 
     assert "S2" in block1.slots
-    assert block1.resource_code == "CA1"
-    assert block1.teacher_acronym == "VR"
+    assert block1.resource_candidates[0].code == "CA1"
+    assert block1.teacher_candidates[0].acronym == "VR"
 
     assert "S3" in block2.slots
-    assert block2.resource_code == "LAB1A"
-    assert block2.teacher_acronym == "SU"
+    assert block2.resource_candidates[0].code == "LAB1A"
+    assert block2.teacher_candidates[0].acronym == "SU"
 
 def test_department_agnostic_cs():
     """Test completely different department format relying entirely on legends."""
@@ -105,13 +105,13 @@ def test_department_agnostic_cs():
     assert "CSE201" in preview.resource_legend
     assert "AILAB" in preview.resource_legend
 
-    blocks = sorted(preview.resolved_blocks, key=lambda b: b.slots[0])
+    blocks = sorted(preview.occupancy_ready_blocks, key=lambda b: b.slots[0])
     block1 = blocks[0]
     block2 = blocks[1]
 
     # Candidates successfully parsed because they are present in the dynamic legend
-    assert block1.resource_code == "CSE201"
-    assert block1.teacher_acronym == "ALICE"
+    assert block1.resource_candidates[0].code == "CSE201"
+    assert block1.teacher_candidates[0].acronym == "ALICE"
 
-    assert block2.resource_code == "AILAB"
-    assert block2.teacher_acronym == "BOB"
+    assert block2.resource_candidates[0].code == "AILAB"
+    assert block2.teacher_candidates[0].acronym == "BOB"

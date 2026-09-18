@@ -18,8 +18,6 @@ from .staging import (
     TeacherCandidate,
     ResourceCandidate,
     TimetableBlock,
-    UnresolvedTimetableBlock,
-    ResolvedActivity,
     DOCXImportPreview,
 )
 from .resolution import ResolutionRule
@@ -27,21 +25,9 @@ from .occupancy import OccupancyExtractor
 
 
 def parse_docx_timetable(docx_bytes: bytes, department: str, academic_year: str, source_file: str) -> DOCXImportPreview:
-    """Parse DOCX timetable document into ImportPreview.
-
-    Args:
-        docx_bytes: Raw DOCX file bytes
-        department: Department name (e.g., "Computer Applications")
-        academic_year: Academic year (e.g., "2026-Odd")
-        source_file: Source filename
-
-    Returns:
-        DOCXImportPreview containing resolved and unresolved blocks
-    """
-    # Load document
+    """Parse DOCX timetable document into ImportPreview."""
     doc = Document(BytesIO(docx_bytes))
 
-    # Create preview
     preview = DOCXImportPreview(
         import_session_id=str(uuid.uuid4()),
         academic_year=academic_year,
@@ -49,7 +35,6 @@ def parse_docx_timetable(docx_bytes: bytes, department: str, academic_year: str,
         source_file=source_file
     )
 
-    # Find main timetable table (table 0)
     if len(doc.tables) == 0:
         preview.errors.append(ValidationIssue(
             severity=ValidationSeverity.ERROR,
@@ -60,49 +45,45 @@ def parse_docx_timetable(docx_bytes: bytes, department: str, academic_year: str,
         return preview
 
     main_table = doc.tables[0]
-
-    # Extract legends dynamically
     faculty_legend, resource_legend = extract_legends(doc)
     preview.faculty_legend = faculty_legend
     preview.resource_legend = resource_legend
 
-    # Parse timetable table
     blocks = parse_timetable_table(main_table, source_file, department, faculty_legend, resource_legend)
 
-    # Classify each block as resolved or unresolved
-    # ALSO extract occupancy independently
     for block in blocks:
         ResolutionRule.classify_block(block)
-
-        # NEW: Extract occupancy independently of resolution status
-        # Subject/activity ambiguity does NOT block occupancy extraction
         occupancy_result = OccupancyExtractor.extract_occupancy(block)
 
-        # Add teacher occupancies
+        block.teacher_allocations = occupancy_result.teacher_occupancies
         preview.teacher_occupancies.extend(occupancy_result.teacher_occupancies)
 
-        # Add resource occupancies
+        block.resource_allocations = occupancy_result.resource_occupancies
         preview.resource_occupancies.extend(occupancy_result.resource_occupancies)
 
-        # Track extraction statistics
         if occupancy_result.extraction_successful:
             preview.occupancy_extraction_success_count += 1
         else:
             preview.occupancy_extraction_blocked_count += 1
 
-        if block.is_resolved:
-            # Convert to ResolvedActivity
-            resolved = convert_to_resolved_activity(block)
-            if resolved:
-                preview.resolved_blocks.append(resolved)
-                preview.resolved_count += 1
-        else:
-            # Keep as unresolved
-            unresolved = convert_to_unresolved_block(block)
-            preview.unresolved_blocks.append(unresolved)
-            preview.unresolved_count += 1
+        # Occupancy-first routing:
+        # A block needs review ONLY if teacher or resource occupancy is genuinely ambiguous
+        # or if extraction was blocked.
+        # Activity semantic ambiguity (AMBIGUOUS/MISSING subject) does NOT require review
+        # because subject interpretation is secondary to availability.
+        needs_review = (
+            block.teacher_occupancy_status == "AMBIGUOUS" or
+            block.resource_occupancy_status == "AMBIGUOUS" or
+            not occupancy_result.extraction_successful
+        )
 
-        # Collect issues
+        if needs_review:
+            preview.occupancy_review_blocks.append(block)
+            preview.occupancy_review_count += 1
+        else:
+            preview.occupancy_ready_blocks.append(block)
+            preview.occupancy_ready_count += 1
+
         for issue in block.issues:
             if issue.severity == ValidationSeverity.ERROR:
                 preview.errors.append(issue)
@@ -462,7 +443,7 @@ def parse_activity_cell(
         return None
 
     # Extract candidates
-    activity_candidates = extract_activity_candidates(lines)
+    activity_candidates = extract_activity_candidates(lines, resource_legend)
     teacher_candidates = extract_teacher_candidates(lines, faculty_legend)
     resource_candidates = extract_resource_candidates(lines, resource_legend)
 
@@ -474,7 +455,6 @@ def parse_activity_cell(
         activity_candidates=activity_candidates,
         teacher_candidates=teacher_candidates,
         resource_candidates=resource_candidates,
-        is_resolved=False,  # Will be classified later
         source_location=source_location,
         original_text=cell_text
     )
@@ -482,50 +462,29 @@ def parse_activity_cell(
     return block
 
 
-def extract_activity_candidates(lines: list[str]) -> list[ActivityCandidate]:
-    """Extract activity candidates from cell lines.
-
-    CONSERVATIVE APPROACH: Preserve raw phrases when boundaries are unclear.
-    Punctuation alone does NOT define activity boundaries.
-
-    Args:
-        lines: Cell lines
-
-    Returns:
-        List of ActivityCandidate objects
-    """
+def extract_activity_candidates(lines: list[str], resource_legend: dict[str, str]) -> list[ActivityCandidate]:
+    """Extract activity candidates from cell lines."""
     candidates = []
+    normalized_legend = {normalize_resource_code(k): k for k in resource_legend.keys()}
 
     for line in lines:
-        # Skip lines with parentheses (teachers/resources)
         if '(' in line or ')' in line:
             continue
-
-        # Skip empty lines
         if not line:
             continue
 
-        # Check if this looks like an activity (not a room code alone)
-        # Activity patterns: "DBMS", "PY1", "PE 1,2,3,4", "DS 3,4", "Library/Research Activity"
-        # Room patterns: "CA1", "LAB1A", "FDC"
+        # Skip if the entire line is a known resource code
+        if normalize_resource_code(line) in normalized_legend:
+            continue
 
-        # Heuristic: If line is just letters+numbers (like "CA1", "LAB1A"), might be room
-        # If line has spaces, commas with text, likely activity
+        is_ambiguous = has_tokenization_ambiguity(line)
+        entry_type = infer_entry_type(line)
 
-        # For now, take first non-parenthesized line as activity
-        if not candidates:  # Only take first line as activity
-            # Check for tokenization ambiguity
-            is_ambiguous = has_tokenization_ambiguity(line)
-
-            # Infer type
-            entry_type = infer_entry_type(line)
-
-            candidates.append(ActivityCandidate(
-                code=line,
-                inferred_type=entry_type,
-                is_tokenization_ambiguous=is_ambiguous
-            ))
-            break
+        candidates.append(ActivityCandidate(
+            code=line,
+            inferred_type=entry_type,
+            is_tokenization_ambiguous=is_ambiguous
+        ))
 
     return candidates
 
@@ -728,95 +687,3 @@ def get_grid_span(cell: _Cell) -> Optional[int]:
     except Exception:
         pass
     return None
-
-
-def convert_to_resolved_activity(block: TimetableBlock) -> Optional[ResolvedActivity]:
-    """Convert resolved TimetableBlock to ResolvedActivity.
-
-    Args:
-        block: Resolved TimetableBlock
-
-    Returns:
-        ResolvedActivity or None if not resolved
-    """
-    if not block.is_resolved:
-        return None
-
-    if not block.activity_candidates or not block.teacher_candidates:
-        return None
-
-    activity = block.activity_candidates[0]
-    teacher = block.teacher_candidates[0]
-    resource = block.resource_candidates[0] if block.resource_candidates else None
-
-    return ResolvedActivity(
-        day=block.day,
-        section=block.section,
-        slots=block.slots,
-        entry_type=activity.inferred_type,
-        subject_or_activity=activity.code,
-        teacher_acronym=teacher.normalized_acronym,
-        resource_code=resource.normalized_code if resource else None,
-        source_location=block.source_location,
-        original_text=block.original_text,
-        manually_resolved=False
-    )
-
-
-def convert_to_unresolved_block(block: TimetableBlock) -> UnresolvedTimetableBlock:
-    """Convert TimetableBlock to UnresolvedTimetableBlock (staging).
-
-    Args:
-        block: TimetableBlock
-
-    Returns:
-        UnresolvedTimetableBlock
-    """
-    return UnresolvedTimetableBlock(
-        temp_id=str(uuid.uuid4()),
-        day=block.day,
-        section=block.section,
-        slots=block.slots,
-        activity_candidates=[
-            {
-                "code": ac.code,
-                "inferred_type": ac.inferred_type,
-                "is_tokenization_ambiguous": ac.is_tokenization_ambiguous
-            }
-            for ac in block.activity_candidates
-        ],
-        teacher_candidates=[
-            {
-                "acronym": tc.acronym,
-                "normalized_acronym": tc.normalized_acronym,
-                "is_identity_resolvable": tc.is_identity_resolvable
-            }
-            for tc in block.teacher_candidates
-        ],
-        resource_candidates=[
-            {
-                "code": rc.code,
-                "normalized_code": rc.normalized_code,
-                "is_identity_resolvable": rc.is_identity_resolvable
-            }
-            for rc in block.resource_candidates
-        ],
-        ambiguity_reason=block.ambiguity_reason or "Unknown",
-        original_text=block.original_text,
-        source_location={
-            "source_type": block.source_location.source_type,
-            "table_index": block.source_location.table_index,
-            "table_row": block.source_location.table_row,
-            "table_col": block.source_location.table_col,
-            "display_context": block.source_location.display_context
-        },
-        issues=[
-            {
-                "severity": issue.severity.value if hasattr(issue.severity, 'value') else str(issue.severity),
-                "code": issue.code,
-                "message": issue.message,
-                "affected_entity_type": issue.affected_entities.get("type", "block")
-            }
-            for issue in block.issues
-        ]
-    )

@@ -11,6 +11,7 @@ Architecture:
 from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime
+import uuid
 
 from app.domain.timetable import SourceLocation, ValidationIssue
 
@@ -62,8 +63,8 @@ class ResourceCandidate:
 class TimetableBlock:
     """Intermediate representation of a timetable cell.
 
-    Preserves individual candidates without asserting relationships.
-    May be RESOLVED (1:1:1 with no ambiguity) or UNRESOLVED (ambiguous).
+    Occupancy-first architecture:
+    Preserves candidates and explicitly separates semantic status from occupancy status.
 
     Transport structure - NOT a persistent domain entity.
     """
@@ -77,9 +78,14 @@ class TimetableBlock:
     teacher_candidates: list[TeacherCandidate]
     resource_candidates: list[ResourceCandidate]
 
-    # Resolution status
-    is_resolved: bool  # True if can convert to ScheduleActivity
-    ambiguity_reason: Optional[str] = None  # Why unresolved, if applicable
+    # Resolution status (Occupancy-First)
+    activity_semantic_status: str = "MISSING"  # "RESOLVED" | "AMBIGUOUS" | "MISSING"
+    teacher_occupancy_status: str = "UNSPECIFIED"  # "DETERMINISTIC" | "AMBIGUOUS" | "UNSPECIFIED"
+    resource_occupancy_status: str = "UNSPECIFIED"  # "DETERMINISTIC" | "AMBIGUOUS" | "UNSPECIFIED"
+
+    # Occupancies attached directly to this block (to avoid circular import, use list)
+    teacher_allocations: list = field(default_factory=list)  # list[TeacherOccupancy]
+    resource_allocations: list = field(default_factory=list) # list[ResourceOccupancy]
 
     # Source traceability
     source_location: SourceLocation = field(default_factory=lambda: SourceLocation(source_type="DOCX"))
@@ -88,53 +94,17 @@ class TimetableBlock:
     # Validation issues accumulated during parsing
     issues: list[ValidationIssue] = field(default_factory=list)
 
-
-@dataclass
-class UnresolvedTimetableBlock:
-    """Transport structure for unresolved block in import preview.
-
-    IMPORTANT: This is NOT a persistent domain entity.
-    Lives only in ImportPreview/staging state during import session.
-    """
-    temp_id: str  # Temporary ID for this import session
-    day: str
-    section: str
-    slots: list[str]
-    activity_candidates: list[dict]  # Serialized ActivityCandidate
-    teacher_candidates: list[dict]  # Serialized TeacherCandidate
-    resource_candidates: list[dict]  # Serialized ResourceCandidate
-    ambiguity_reason: str
-    original_text: str
-    source_location: dict  # Serialized SourceLocation
-    issues: list[dict]  # Serialized ValidationIssue
-
-
-@dataclass
-class ResolvedActivity:
-    """A resolved activity ready for conversion to CanonicalTimetable.
-
-    Transport structure - NOT a persistent domain entity.
-    """
-    day: str
-    section: str
-    slots: list[str]
-    entry_type: str  # "CLASS" | "LAB" | "OTHER"
-    subject_or_activity: str
-    teacher_acronym: str
-    resource_code: Optional[str]
-    source_location: SourceLocation
-    original_text: str = ""
-    manually_resolved: bool = False
+    temp_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
 
 @dataclass
 class ManualResolutionMapping:
-    """User's explicit resolution decision for unresolved block.
+    """User's explicit resolution decision for a block requiring review.
 
     IMPORTANT: This is NOT a persistent domain entity.
     Applied to ImportPreview during import session, then discarded.
     """
-    source_block_temp_id: str  # References UnresolvedTimetableBlock.temp_id
+    source_block_temp_id: str  # References TimetableBlock.temp_id
     selected_activity: str
     selected_teacher: str
     selected_resource: Optional[str]
@@ -159,7 +129,7 @@ class ExcludedCandidate:
 class DOCXImportPreview:
     """Transport structure for DOCX import preview.
 
-    Contains both resolved and unresolved blocks.
+    Contains occupancy-ready blocks and blocks requiring review.
     This entire structure is staging/transport data.
 
     IMPORTANT: NOT a persistent domain entity.
@@ -169,11 +139,11 @@ class DOCXImportPreview:
     department: str
     source_file: str
 
-    # Successfully resolved (can convert to CanonicalTimetable)
-    resolved_blocks: list[ResolvedActivity] = field(default_factory=list)
+    # Blocks where teacher/resource occupancy is deterministic
+    occupancy_ready_blocks: list[TimetableBlock] = field(default_factory=list)
 
-    # Unresolved blocks (need manual resolution)
-    unresolved_blocks: list[UnresolvedTimetableBlock] = field(default_factory=list)
+    # Blocks with genuine ambiguity requiring manual resolution
+    occupancy_review_blocks: list[TimetableBlock] = field(default_factory=list)
 
     # Manual resolutions applied
     manual_resolutions: list[ManualResolutionMapping] = field(default_factory=list)
@@ -187,8 +157,8 @@ class DOCXImportPreview:
 
     # Summary
     total_blocks: int = 0
-    resolved_count: int = 0
-    unresolved_count: int = 0
+    occupancy_ready_count: int = 0
+    occupancy_review_count: int = 0
     manually_resolved_count: int = 0
 
     # Legends (for document-driven resolution)

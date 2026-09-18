@@ -177,7 +177,7 @@ def resolve_blocks(
     errors: list[str] = []
 
     # Convert preview back to parser format for resolution
-    from app.services.docx_import.staging import UnresolvedTimetableBlock, ManualResolutionMapping
+    from app.services.docx_import.staging import ManualResolutionMapping
 
     # Reconstruct unresolved blocks
     unresolved_blocks_map = {block.block_id: block for block in preview.unresolved_blocks}
@@ -290,9 +290,9 @@ def _convert_parser_to_api_preview(
         for acronym, name in parser_preview.faculty_legend.items()
     ]
 
-    # Convert resolved blocks
+    # Convert resolved blocks (from occupancy_ready_blocks)
     resolved_activities = []
-    for block in parser_preview.resolved_blocks:
+    for block in parser_preview.occupancy_ready_blocks:
         # Convert source_location to string if it's an object
         source_loc_str = block.source_location
         if hasattr(block.source_location, 'to_display'):
@@ -300,23 +300,28 @@ def _convert_parser_to_api_preview(
         elif not isinstance(block.source_location, str):
             source_loc_str = str(block.source_location)
 
-        resolved = ResolvedActivity(
-            day=block.day,
-            section=block.section,
-            slots=block.slots,
-            teacher_acronym=block.teacher_acronym,
-            subject_or_activity=block.subject_or_activity,
-            resource_code=block.resource_code,
-            source_location=source_loc_str,
-            entry_type="CLASS" if not hasattr(block, 'entry_type') else block.entry_type,
-            is_multi_slot=len(block.slots) > 1,
-            is_manually_resolved=False,
-        )
-        resolved_activities.append(resolved)
+        combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or "Unknown Activity"
+        entry_type = block.activity_candidates[0].inferred_type if block.activity_candidates else "CLASS"
+        combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
 
-    # Convert unresolved blocks
+        for teacher in block.teacher_candidates:
+            resolved = ResolvedActivity(
+                day=block.day,
+                section=block.section,
+                slots=block.slots,
+                teacher_acronym=teacher.normalized_acronym,
+                subject_or_activity=combined_activity,
+                resource_code=combined_resource,
+                source_location=source_loc_str,
+                entry_type=entry_type,
+                is_multi_slot=len(block.slots) > 1,
+                is_manually_resolved=False,
+            )
+            resolved_activities.append(resolved)
+
+    # Convert unresolved blocks (from occupancy_review_blocks)
     unresolved_blocks = []
-    for block in parser_preview.unresolved_blocks:
+    for block in parser_preview.occupancy_review_blocks:
         # Convert source_location to string
         source_loc_str = block.source_location
         if isinstance(block.source_location, dict):
@@ -329,23 +334,51 @@ def _convert_parser_to_api_preview(
 
         # Convert candidates
         activity_candidates = [
-            ActivityCandidate(code=c["code"], description=c.get("description"))
+            ActivityCandidate(code=c.code, description=None)
             for c in block.activity_candidates
         ]
         teacher_candidates = [
             TeacherCandidate(
-                acronym=c["acronym"],
-                name=parser_preview.faculty_legend.get(c["acronym"])
+                acronym=c.acronym,
+                name=parser_preview.faculty_legend.get(c.acronym)
             )
             for c in block.teacher_candidates
         ]
         resource_candidates = [
-            ResourceCandidate(code=c["code"], type=c.get("type"))
+            ResourceCandidate(code=c.code, type=None)
             for c in block.resource_candidates
         ]
 
+        # Compute ambiguity reason and resolution_required based on occupancy statuses
+        reasons = []
+        resolution_required = False
+        if block.teacher_occupancy_status == "AMBIGUOUS":
+            reasons.append("teacher allocation ambiguous")
+            resolution_required = True
+        elif block.teacher_occupancy_status == "UNSPECIFIED":
+            reasons.append("no teacher specified")
+        if block.resource_occupancy_status == "AMBIGUOUS":
+            reasons.append("resource allocation ambiguous")
+            resolution_required = True
+        elif block.resource_occupancy_status == "UNSPECIFIED" and len(block.resource_candidates) > 0:
+            reasons.append("resource unresolved")
+        # Extraction blocked when identity errors prevent occupancy extraction
+        error_codes = {issue.code for issue in block.issues}
+        extraction_blocked = (
+            "UNRESOLVED_TEACHER_IDENTITY" in error_codes or
+            "UNRESOLVED_RESOURCE_IDENTITY" in error_codes
+        )
+        if extraction_blocked:
+            reasons.append("occupancy extraction blocked")
+            resolution_required = True
+        if block.activity_semantic_status in ("AMBIGUOUS", "MISSING"):
+            reasons.append(f"activity: {block.activity_semantic_status.lower()}")
+            # NOTE: activity ambiguity does NOT set resolution_required
+
+        ambiguity_reason = ", ".join(reasons) if reasons else "review required"
+
         unresolved = UnresolvedBlock(
-            block_id=block.temp_id,  # Use temp_id as block_id
+            block_id=block.temp_id,
             day=block.day,
             section=block.section,
             slots=block.slots,
@@ -353,8 +386,11 @@ def _convert_parser_to_api_preview(
             activity_candidates=activity_candidates,
             teacher_candidates=teacher_candidates,
             resource_candidates=resource_candidates,
-            ambiguity_reason=block.ambiguity_reason,
-            resolution_required=True,
+            activity_semantic_status=block.activity_semantic_status,
+            teacher_occupancy_status=block.teacher_occupancy_status,
+            resource_occupancy_status=block.resource_occupancy_status,
+            ambiguity_reason=ambiguity_reason,
+            resolution_required=resolution_required,
         )
         unresolved_blocks.append(unresolved)
 
@@ -392,9 +428,9 @@ def _convert_parser_to_api_preview(
         parser_status=parser_status,
         physical_structure=physical_structure,
         total_blocks=parser_preview.total_blocks,
-        resolved_count=parser_preview.resolved_count,
-        unresolved_count=parser_preview.unresolved_count,
-        manually_resolved_count=0,
+        resolved_count=parser_preview.occupancy_ready_count,
+        unresolved_count=parser_preview.occupancy_review_count,
+        manually_resolved_count=parser_preview.manually_resolved_count,
         faculty_legend=faculty_legend,
         resolved_activities=resolved_activities,
         unresolved_blocks=unresolved_blocks,

@@ -39,15 +39,15 @@ class TestRealMCADOCX:
 
         # Should parse blocks (real DOCX has many activities)
         assert preview.total_blocks > 100, f"Expected >100 blocks, got {preview.total_blocks}"
-        assert preview.resolved_count > 50, f"Expected >50 resolved, got {preview.resolved_count}"
+        assert preview.occupancy_ready_count > 50, f"Expected >50 resolved, got {preview.occupancy_ready_count}"
 
         # Should have some unresolved blocks (ambiguous content exists)
-        assert preview.unresolved_count > 0, "Expected some unresolved blocks"
+        assert preview.occupancy_review_count > 0, "Expected some unresolved blocks"
 
         print(f"\nActual MCA DOCX parse results:")
         print(f"  Total blocks: {preview.total_blocks}")
-        print(f"  Resolved: {preview.resolved_count}")
-        print(f"  Unresolved: {preview.unresolved_count}")
+        print(f"  Resolved: {preview.occupancy_ready_count}")
+        print(f"  Unresolved: {preview.occupancy_review_count}")
         print(f"  Errors: {len(preview.errors)}")
         print(f"  Faculty: {len(preview.faculty_legend)}")
 
@@ -65,7 +65,7 @@ class TestRealMCADOCX:
 
         # Find Tuesday I-A blocks
         tuesday_ia_blocks = [
-            b for b in preview.unresolved_blocks
+            b for b in preview.occupancy_review_blocks
             if b.day == "tuesday" and "I-A" in b.section
         ]
 
@@ -76,24 +76,22 @@ class TestRealMCADOCX:
         ambiguous_block = None
         for block in tuesday_ia_blocks:
             for activity in block.activity_candidates:
-                if "PY1" in activity["code"] and "PE2" in activity["code"]:
+                if "PY1" in activity.code and "PE2" in activity.code:
                     ambiguous_block = block
                     break
 
         assert ambiguous_block is not None, "Known ambiguous Tuesday I-A block not found"
 
         # UnresolvedTimetableBlock is by definition unresolved
-        # (it's in preview.unresolved_blocks)
+        # (it's in preview.occupancy_review_blocks)
 
         # Should have multiple teachers
         assert len(ambiguous_block.teacher_candidates) > 1, \
             f"Expected multiple teachers, got {len(ambiguous_block.teacher_candidates)}"
 
         # Should have ambiguity reason
-        assert ambiguous_block.ambiguity_reason
 
         print(f"\nTuesday I-A ambiguous block verified:")
-        print(f"  Activities: {[a['code'][:30] for a in ambiguous_block.activity_candidates]}")
-        print(f"  Teachers: {[t['acronym'] for t in ambiguous_block.teacher_candidates]}")
-        print(f"  Resources: {[r['code'] for r in ambiguous_block.resource_candidates]}")
-        print(f"  Reason: {ambiguous_block.ambiguity_reason[:80]}")
+        print(f"  Activities: {[a.code[:30] for a in ambiguous_block.activity_candidates]}")
+        print(f"  Teachers: {[t.acronym for t in ambiguous_block.teacher_candidates]}")
+        print(f"  Resources: {[r.code for r in ambiguous_block.resource_candidates]}")

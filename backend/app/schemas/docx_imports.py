@@ -62,10 +62,16 @@ class ResourceCandidate(BaseModel):
 
 class UnresolvedBlock(BaseModel):
     """
-    One timetable block that cannot be automatically resolved.
+    One timetable block that requires review.
 
-    Represents ambiguous or incomplete information that requires
-    explicit user resolution before canonical conversion.
+    Occupancy-first model: The three dimensions are independent.
+    - activity_semantic_status: RESOLVED | AMBIGUOUS | MISSING (subject interpretation)
+    - teacher_occupancy_status: DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
+    - resource_occupancy_status: DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
+
+    resolution_required is True ONLY when teacher or resource occupancy is
+    genuinely ambiguous. Activity semantic ambiguity alone does NOT require
+    manual resolution to proceed to confirmation.
 
     IMPORTANT: These are transport-only structures, not persisted to DB.
     """
@@ -85,9 +91,16 @@ class UnresolvedBlock(BaseModel):
     teacher_candidates: list[TeacherCandidate] = Field(default_factory=list)
     resource_candidates: list[ResourceCandidate] = Field(default_factory=list)
 
-    # Ambiguity reason
+    # Occupancy-first: three independent statuses
+    activity_semantic_status: str = "MISSING"  # RESOLVED | AMBIGUOUS | MISSING
+    teacher_occupancy_status: str = "UNSPECIFIED"  # DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
+    resource_occupancy_status: str = "UNSPECIFIED"  # DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
+
+    # Ambiguity reason (human-readable summary)
     ambiguity_reason: str
-    resolution_required: bool = True  # False if this can be intentionally excluded
+    # resolution_required = True only when teacher or resource allocation is genuinely ambiguous.
+    # Activity semantic ambiguity alone does NOT set this to True.
+    resolution_required: bool = False
 
 
 # ---------------------------------------------------------------------------

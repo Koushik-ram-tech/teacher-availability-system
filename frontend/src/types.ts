@@ -364,7 +364,7 @@ export interface DOCXResourceCandidate {
   type?: string | null;
 }
 
-/** Unresolved timetable block requiring manual resolution */
+/** Unresolved timetable block requiring review */
 export interface DOCXUnresolvedBlock {
   block_id: string;
   day: string;
@@ -376,7 +376,13 @@ export interface DOCXUnresolvedBlock {
   activity_candidates: DOCXActivityCandidate[];
   teacher_candidates: DOCXTeacherCandidate[];
   resource_candidates: DOCXResourceCandidate[];
+  // Occupancy-first: three independent statuses
+  activity_semantic_status: string;   // 'RESOLVED' | 'AMBIGUOUS' | 'MISSING'
+  teacher_occupancy_status: string;   // 'DETERMINISTIC' | 'AMBIGUOUS' | 'UNSPECIFIED'
+  resource_occupancy_status: string;  // 'DETERMINISTIC' | 'AMBIGUOUS' | 'UNSPECIFIED'
   ambiguity_reason: string;
+  // True only when teacher or resource allocation is genuinely ambiguous.
+  // Activity semantic ambiguity alone does NOT set this to true.
   resolution_required: boolean;
 }
 

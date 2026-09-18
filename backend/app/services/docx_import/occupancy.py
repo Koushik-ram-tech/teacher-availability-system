@@ -175,24 +175,14 @@ class OccupancyExtractor:
     def _extract_teacher_occupancy(cls, block: TimetableBlock) -> OccupancyExtractionResult:
         """Extract teacher occupancy from block.
 
-        IMPORTANT: Subject/activity ambiguity does NOT block extraction when
-        teacher allocation is deterministic.
-
-        Returns OCCUPIED when:
-        - Teachers are explicitly present in document structure
-        - Teacher allocation to the block is deterministic
-
-        Returns AMBIGUOUS when:
-        - Multiple teachers present but unclear which are allocated
-        - Document structure provides alternatives rather than allocations
+        IMPORTANT: Subject/activity ambiguity does NOT block extraction.
+        All structurally associated teachers are marked OCCUPIED.
 
         Does NOT extract when:
-        - No teachers present (MISSING_TEACHER)
-        - Teacher identity unresolvable
+        - Teacher identity unresolvable (returns extraction failed)
         """
         result = OccupancyExtractionResult()
 
-        # Check for genuine teacher allocation issues
         error_codes = {
             issue.code
             for issue in block.issues
@@ -201,8 +191,8 @@ class OccupancyExtractor:
 
         # Case 1: No teachers present
         if len(block.teacher_candidates) == 0:
-            result.extraction_successful = False
-            result.blocked_reason = "MISSING_TEACHER: No teachers specified"
+            block.teacher_occupancy_status = "UNSPECIFIED"
+            result.extraction_successful = True
             return result
 
         # Case 2: Unresolvable teacher identity
@@ -211,123 +201,40 @@ class OccupancyExtractor:
             result.blocked_reason = "UNRESOLVED_TEACHER_IDENTITY: Cannot resolve teacher acronym"
             return result
 
-        # Case 3: Genuinely ambiguous teacher mapping
-        # This means multiple teachers but document structure doesn't establish
-        # which teachers are actually allocated vs alternatives
-        if 'AMBIGUOUS_TEACHER_MAPPING' in error_codes:
-            # Check if this is truly ambiguous or just multiple teachers on same block
-            # For now, we extract with AMBIGUOUS status if there's structural ambiguity
+        # Case 3: All extracted teachers are considered allocated to this block
+        # regardless of how many activities are present.
+        extraction_reason = "Teacher allocation deterministic from document structure"
+        block.teacher_occupancy_status = "DETERMINISTIC"
 
-            # If the error was raised, it means ResolutionRule found ambiguity
-            # However, for OCCUPANCY, we need to determine if ALL teachers are
-            # allocated to the block (even if we don't know which→which subject)
+        for teacher_candidate in block.teacher_candidates:
+            occupancies = cls._create_teacher_occupancies(
+                teacher_candidate=teacher_candidate,
+                day=block.day,
+                slots=block.slots,
+                status=OccupancyStatus.OCCUPIED,
+                source_location=block.source_location,
+                original_text=block.original_text,
+                extraction_reason=extraction_reason
+            )
+            result.teacher_occupancies.extend(occupancies)
 
-            # CONSERVATIVE: If AMBIGUOUS_TEACHER_MAPPING raised, the document
-            # structure doesn't clearly establish allocation
-            result.extraction_successful = False
-            result.blocked_reason = "AMBIGUOUS_TEACHER_MAPPING: Unclear which teachers allocated"
-            return result
-
-        # Case 4: Activity tokenization ambiguous BUT teachers deterministic
-        # This is the KEY CASE where we extract occupancy
-        # Example: "PY1, PE2, DS 3,4" with (SU) (TS) (SS, KPS)
-        # All 4 teachers are allocated to this block - mark all OCCUPIED
-
-        if 'ACTIVITY_TOKENIZATION_AMBIGUOUS' in error_codes:
-            # Subject is ambiguous but teacher allocation is clear
-            # Extract occupancy for ALL teachers in the block
-            extraction_reason = "Activity tokenization ambiguous but teacher allocation deterministic"
-
-            for teacher_candidate in block.teacher_candidates:
-                occupancies = cls._create_teacher_occupancies(
-                    teacher_candidate=teacher_candidate,
-                    day=block.day,
-                    slots=block.slots,
-                    status=OccupancyStatus.OCCUPIED,
-                    source_location=block.source_location,
-                    original_text=block.original_text,
-                    extraction_reason=extraction_reason
-                )
-                result.teacher_occupancies.extend(occupancies)
-
-            result.extraction_successful = True
-            return result
-
-        # Case 5: Multiple teachers with one activity
-        # If there's only one activity but multiple teachers, they might all
-        # be team-teaching, or it might be ambiguous
-        if len(block.teacher_candidates) > 1 and len(block.activity_candidates) == 1:
-            # Check if AMBIGUOUS_TEACHER_MAPPING was raised
-            # If not raised, assume all teachers allocated to the single activity
-            extraction_reason = "Multiple teachers allocated to block"
-
-            for teacher_candidate in block.teacher_candidates:
-                occupancies = cls._create_teacher_occupancies(
-                    teacher_candidate=teacher_candidate,
-                    day=block.day,
-                    slots=block.slots,
-                    status=OccupancyStatus.OCCUPIED,
-                    source_location=block.source_location,
-                    original_text=block.original_text,
-                    extraction_reason=extraction_reason
-                )
-                result.teacher_occupancies.extend(occupancies)
-
-            result.extraction_successful = True
-            return result
-
-        # Case 6: Standard resolved or single teacher
-        # One teacher, one activity, or already resolved
-        if len(block.teacher_candidates) >= 1:
-            extraction_reason = "Teacher allocation deterministic from document structure"
-
-            for teacher_candidate in block.teacher_candidates:
-                occupancies = cls._create_teacher_occupancies(
-                    teacher_candidate=teacher_candidate,
-                    day=block.day,
-                    slots=block.slots,
-                    status=OccupancyStatus.OCCUPIED,
-                    source_location=block.source_location,
-                    original_text=block.original_text,
-                    extraction_reason=extraction_reason
-                )
-                result.teacher_occupancies.extend(occupancies)
-
-            result.extraction_successful = True
-            return result
-
-        # Default: extraction failed
-        result.extraction_successful = False
-        result.blocked_reason = "Unknown teacher allocation scenario"
+        result.extraction_successful = True
         return result
 
     @classmethod
     def _extract_resource_occupancy(cls, block: TimetableBlock) -> OccupancyExtractionResult:
         """Extract resource occupancy from block.
 
-        IMPORTANT: Subject/activity ambiguity does NOT block extraction when
-        resource allocation is deterministic.
-
-        Returns OCCUPIED when:
-        - Resources are explicitly present in document structure
-        - Resource allocation to the block is deterministic
-
-        Returns AMBIGUOUS when:
-        - Multiple resources present but unclear which are allocated
-        - Document structure provides alternatives rather than allocations
-
-        Does NOT extract when:
-        - No resources present (optional - not an error)
-        - Resource identity unresolvable
+        IMPORTANT: Subject/activity ambiguity does NOT block extraction.
         """
         result = OccupancyExtractionResult()
 
-        # Resources are optional - no resources is not a blocker
+        # Resources are optional
         if len(block.resource_candidates) == 0:
-            result.extraction_successful = True  # No extraction needed, not an error
+            block.resource_occupancy_status = "UNSPECIFIED"
+            result.extraction_successful = True
             return result
 
-        # Check for genuine resource allocation issues
         error_codes = {
             issue.code
             for issue in block.issues
@@ -340,47 +247,18 @@ class OccupancyExtractor:
             result.blocked_reason = "UNRESOLVED_RESOURCE_IDENTITY: Cannot resolve resource code"
             return result
 
-        # Case 2: Ambiguous resource for single activity
-        if 'AMBIGUOUS_RESOURCE_SINGLE_ACTIVITY' in error_codes:
-            # Multiple resources but unclear which is allocated
-            result.extraction_successful = False
-            result.blocked_reason = "AMBIGUOUS_RESOURCE_SINGLE_ACTIVITY: Unclear which resource allocated"
-            return result
-
-        # Case 3: Activity tokenization ambiguous BUT resources deterministic
-        # Example: "PY1, PE2, DS 3,4" with (LAB1B) (LAB 1A)
-        # Both labs are allocated to this block - mark both OCCUPIED
-
-        if 'ACTIVITY_TOKENIZATION_AMBIGUOUS' in error_codes:
-            extraction_reason = "Activity tokenization ambiguous but resource allocation deterministic"
-
-            for resource_candidate in block.resource_candidates:
-                occupancies = cls._create_resource_occupancies(
-                    resource_candidate=resource_candidate,
-                    day=block.day,
-                    slots=block.slots,
-                    status=OccupancyStatus.OCCUPIED,
-                    source_location=block.source_location,
-                    original_text=block.original_text,
-                    extraction_reason=extraction_reason
-                )
-                result.resource_occupancies.extend(occupancies)
-
-            result.extraction_successful = True
-            return result
-
-        # Case 4: Multiple resources allocated to block
-        # If document structure shows multiple resources for the block,
-        # all are allocated (e.g., multiple labs for multiple activities)
+        # Case 2: Multiple resources generally implies genuine ambiguity for room mapping
+        # unless structurally proven otherwise. We default to AMBIGUOUS.
         if len(block.resource_candidates) > 1:
-            extraction_reason = "Multiple resources allocated to block"
+            extraction_reason = "Multiple resources listed without explicit mapping"
+            block.resource_occupancy_status = "AMBIGUOUS"
 
             for resource_candidate in block.resource_candidates:
                 occupancies = cls._create_resource_occupancies(
                     resource_candidate=resource_candidate,
                     day=block.day,
                     slots=block.slots,
-                    status=OccupancyStatus.OCCUPIED,
+                    status=OccupancyStatus.AMBIGUOUS,
                     source_location=block.source_location,
                     original_text=block.original_text,
                     extraction_reason=extraction_reason
@@ -390,26 +268,22 @@ class OccupancyExtractor:
             result.extraction_successful = True
             return result
 
-        # Case 5: Standard single resource
-        if len(block.resource_candidates) == 1:
-            extraction_reason = "Resource allocation deterministic from document structure"
+        # Case 3: Standard single resource
+        extraction_reason = "Resource allocation deterministic from document structure"
+        block.resource_occupancy_status = "DETERMINISTIC"
 
-            resource_candidate = block.resource_candidates[0]
-            occupancies = cls._create_resource_occupancies(
-                resource_candidate=resource_candidate,
-                day=block.day,
-                slots=block.slots,
-                status=OccupancyStatus.OCCUPIED,
-                source_location=block.source_location,
-                original_text=block.original_text,
-                extraction_reason=extraction_reason
-            )
-            result.resource_occupancies.extend(occupancies)
+        resource_candidate = block.resource_candidates[0]
+        occupancies = cls._create_resource_occupancies(
+            resource_candidate=resource_candidate,
+            day=block.day,
+            slots=block.slots,
+            status=OccupancyStatus.OCCUPIED,
+            source_location=block.source_location,
+            original_text=block.original_text,
+            extraction_reason=extraction_reason
+        )
+        result.resource_occupancies.extend(occupancies)
 
-            result.extraction_successful = True
-            return result
-
-        # Default: extraction successful (no resources is valid)
         result.extraction_successful = True
         return result
 

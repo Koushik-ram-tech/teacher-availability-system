@@ -14,7 +14,7 @@ from app.domain.timetable import (
     TeacherIdentity,
     SourceLocation,
 )
-from .staging import DOCXImportPreview, ResolvedActivity
+from .staging import DOCXImportPreview
 
 
 def convert_preview_to_canonical(
@@ -44,35 +44,40 @@ def convert_preview_to_canonical(
         return None
 
     # Check for unresolved blocks (cannot publish with unresolved)
-    if preview.unresolved_blocks:
+    if preview.occupancy_review_blocks:
         return None
 
     # Extract unique teachers
     teachers = extract_teacher_identities(preview, program_name, level, semester)
 
-    # Convert resolved blocks to ScheduleActivity
+    # Convert occupancy_ready blocks to ScheduleActivity
     activities = []
-    for resolved in preview.resolved_blocks:
+    for block in preview.occupancy_ready_blocks:
         # Convert day name to ISO
-        day_iso = DAY_NAME_TO_ISO.get(resolved.day, 1)
+        day_iso = DAY_NAME_TO_ISO.get(block.day, 1)
 
         # Create slot range
         slot_range = ActivitySlotRange(
             day_of_week=day_iso,
-            slot_codes=resolved.slots,
-            source_location=resolved.source_location
+            slot_codes=block.slots,
+            source_location=block.source_location
         )
 
-        activities.append(ScheduleActivity(
-            teacher_acronym=resolved.teacher_acronym,
-            entry_type=resolved.entry_type,  # type: ignore[arg-type]
-            subject_or_activity=resolved.subject_or_activity,
-            section=resolved.section,
-            room=resolved.resource_code,
-            notes=None,
-            slot_range=slot_range,
-            issues=[]
-        ))
+        combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or "Unknown Activity"
+        entry_type = block.activity_candidates[0].inferred_type if block.activity_candidates else "CLASS"
+        combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
+
+        for teacher in block.teacher_candidates:
+            activities.append(ScheduleActivity(
+                teacher_acronym=teacher.normalized_acronym,
+                entry_type=entry_type,  # type: ignore[arg-type]
+                subject_or_activity=combined_activity,
+                section=block.section,
+                room=combined_resource,
+                notes=None,
+                slot_range=slot_range,
+                issues=[]
+            ))
 
     # Create CanonicalTimetable
     return CanonicalTimetable(
@@ -103,22 +108,23 @@ def extract_teacher_identities(
     """
     teachers_map = {}
 
-    for resolved in preview.resolved_blocks:
-        acronym = resolved.teacher_acronym
-        if acronym not in teachers_map:
-            # Get full name from legend if available
-            full_name = preview.faculty_legend.get(acronym, "")
+    for block in preview.occupancy_ready_blocks:
+        for teacher in block.teacher_candidates:
+            acronym = teacher.normalized_acronym
+            if acronym not in teachers_map:
+                # Get full name from legend if available
+                full_name = preview.faculty_legend.get(acronym, "")
 
-            teachers_map[acronym] = TeacherIdentity(
-                acronym=acronym,
-                name=full_name if full_name else acronym,
-                level=level,
-                program_name=program_name,
-                semester=semester,
-                department=preview.department,
-                resolved_teacher_id=None,
-                action="CREATE"
-            )
+                teachers_map[acronym] = TeacherIdentity(
+                    acronym=acronym,
+                    name=full_name if full_name else acronym,
+                    level=level,
+                    program_name=program_name,
+                    semester=semester,
+                    department=preview.department,
+                    resolved_teacher_id=None,
+                    action="CREATE"
+                )
 
     return list(teachers_map.values())
 

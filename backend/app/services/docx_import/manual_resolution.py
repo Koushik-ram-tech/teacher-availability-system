@@ -9,9 +9,7 @@ from typing import Optional
 from app.domain.timetable import SourceLocation, ValidationIssue, ValidationSeverity
 from .staging import (
     DOCXImportPreview,
-    UnresolvedTimetableBlock,
     ManualResolutionMapping,
-    ResolvedActivity,
     ExcludedCandidate,
 )
 

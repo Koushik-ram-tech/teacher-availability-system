@@ -28,6 +28,8 @@ type Phase =
 // ---------------------------------------------------------------------------
 
 function canConfirm(preview: DOCXImportPreview): boolean {
+  // Confirmation is blocked ONLY when teacher or resource occupancy is genuinely ambiguous.
+  // Activity semantic ambiguity alone does NOT block confirmation.
   return preview.unresolved_blocks.filter(b => b.resolution_required).length === 0;
 }
 
@@ -295,6 +297,29 @@ function ResolvedActivitiesTable({ activities }: { activities: DOCXResolvedActiv
   );
 }
 
+// Status badge helpers
+function OccupancyBadge({ status, kind }: { status: string; kind: 'teacher' | 'resource' | 'activity' }) {
+  let icon = '';
+  let className = '';
+  let label = status;
+
+  if (kind === 'activity') {
+    if (status === 'RESOLVED') { icon = '✓'; className = 'badge-ok'; label = 'Resolved'; }
+    else if (status === 'AMBIGUOUS') { icon = '⚠'; className = 'badge-warn'; label = 'Ambiguous (informational)'; }
+    else { icon = '—'; className = 'badge-muted'; label = 'Not specified'; }
+  } else {
+    if (status === 'DETERMINISTIC') { icon = '✓'; className = 'badge-ok'; label = 'Determined'; }
+    else if (status === 'AMBIGUOUS') { icon = '⚠'; className = 'badge-error'; label = 'Ambiguous'; }
+    else { icon = '—'; className = 'badge-muted'; label = 'None'; }
+  }
+
+  return (
+    <span className={`occ-badge ${className}`} title={status}>
+      {icon} {label}
+    </span>
+  );
+}
+
 function UnresolvedBlocksTable({
   blocks,
   onResolve,
@@ -322,21 +347,32 @@ function UnresolvedBlocksTable({
 
   function handleFinalizeSelected() {
     if (selectedBlocks.size === 0) return;
-
     const confirmed = window.confirm(
       `Finalize ${selectedBlocks.size} block(s)?\n\n` +
       `These blocks will be marked as excluded and removed from the import. ` +
       `This action will allow confirmation to proceed but the blocks will not be imported.`
     );
-
     if (confirmed) {
       onFinalize(Array.from(selectedBlocks));
       setSelectedBlocks(new Set());
     }
   }
 
+  const needingAction = blocks.filter(b => b.resolution_required);
+  const informationalOnly = blocks.filter(b => !b.resolution_required);
+
   return (
     <div>
+      {needingAction.length === 0 && informationalOnly.length > 0 && (
+        <div className="import-info-banner" role="status" style={{ marginBottom: '1rem' }}>
+          <span className="import-banner__icon">ℹ️</span>
+          <span>
+            <strong>{informationalOnly.length} block{informationalOnly.length > 1 ? 's' : ''} have ambiguous activity text</strong> but teacher and resource occupancy is already determined.
+            These do <em>not</em> block confirmation — they are shown for information only.
+          </span>
+        </div>
+      )}
+
       <div className="import-table-wrap">
         <table className="import-table">
           <thead>
@@ -355,19 +391,20 @@ function UnresolvedBlocksTable({
                   aria-label="Select all"
                 />
               </th>
-              <th>Day</th>
-              <th>Section</th>
-              <th>Slots</th>
-              <th>Activity Candidates</th>
-              <th>Teacher Candidates</th>
-              <th>Resource Candidates</th>
-              <th>Reason</th>
+              <th>Day / Section / Slots</th>
+              <th>Activity<br/><span style={{fontSize:'0.8em',fontWeight:'normal',color:'var(--color-muted)'}}>informational</span></th>
+              <th>Teacher Occupancy</th>
+              <th>Resource Occupancy</th>
+              <th>Blocks Confirm?</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {blocks.map((block) => (
-              <tr key={block.block_id} className="import-row--warn">
+              <tr
+                key={block.block_id}
+                className={block.resolution_required ? 'import-row--warn' : 'import-row--info'}
+              >
                 <td>
                   <input
                     type="checkbox"
@@ -376,23 +413,25 @@ function UnresolvedBlocksTable({
                     aria-label={`Select block ${block.block_id}`}
                   />
                 </td>
-                <td>{capitalize(block.day)}</td>
-                <td>{block.section}</td>
-                <td>{block.slots.join(', ')}</td>
                 <td>
-                  {block.activity_candidates.length > 0 ? (
-                    <ul className="candidate-list">
+                  <strong>{capitalize(block.day)}</strong><br/>
+                  {block.section}<br/>
+                  <code style={{fontSize:'0.85em'}}>{block.slots.join('+')}</code>
+                </td>
+                <td>
+                  <OccupancyBadge status={block.activity_semantic_status} kind="activity" />
+                  {block.activity_candidates.length > 0 && (
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.85em', color: 'var(--color-muted)' }}>
                       {block.activity_candidates.map((a, i) => (
-                        <li key={i}><code>{a.code}</code></li>
+                        <div key={i}><code>{a.code}</code></div>
                       ))}
-                    </ul>
-                  ) : (
-                    <span className="muted">None</span>
+                    </div>
                   )}
                 </td>
                 <td>
-                  {block.teacher_candidates.length > 0 ? (
-                    <ul className="candidate-list">
+                  <OccupancyBadge status={block.teacher_occupancy_status} kind="teacher" />
+                  {block.teacher_candidates.length > 0 && (
+                    <ul className="candidate-list" style={{ marginTop: '0.25rem' }}>
                       {block.teacher_candidates.map((t, i) => (
                         <li key={i}>
                           <code>{t.acronym}</code>
@@ -400,32 +439,33 @@ function UnresolvedBlocksTable({
                         </li>
                       ))}
                     </ul>
-                  ) : (
-                    <span className="muted">None</span>
                   )}
                 </td>
                 <td>
-                  {block.resource_candidates.length > 0 ? (
-                    <ul className="candidate-list">
+                  <OccupancyBadge status={block.resource_occupancy_status} kind="resource" />
+                  {block.resource_candidates.length > 0 && (
+                    <ul className="candidate-list" style={{ marginTop: '0.25rem' }}>
                       {block.resource_candidates.map((r, i) => (
                         <li key={i}><code>{r.code}</code></li>
                       ))}
                     </ul>
-                  ) : (
-                    <span className="muted">None</span>
                   )}
                 </td>
-                <td className="import-inline-warn" style={{ fontSize: '0.9em' }}>
-                  {block.ambiguity_reason}
+                <td style={{ textAlign: 'center' }}>
+                  {block.resolution_required
+                    ? <span className="badge-error" title="Blocks confirmation">✗ Blocked</span>
+                    : <span className="badge-ok" title="Does not block confirmation">✓ OK</span>}
                 </td>
                 <td>
-                  <button
-                    className="import-secondary-btn"
-                    style={{ fontSize: '0.9em', padding: '4px 8px' }}
-                    onClick={() => onResolve(block)}
-                  >
-                    Resolve
-                  </button>
+                  {block.resolution_required && (
+                    <button
+                      className="import-secondary-btn"
+                      style={{ fontSize: '0.9em', padding: '4px 8px' }}
+                      onClick={() => onResolve(block)}
+                    >
+                      Resolve
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
