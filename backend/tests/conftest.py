@@ -110,13 +110,43 @@ _SQLITE_DDL_STATEMENTS = [
         section TEXT,
         room TEXT,
         resource_id TEXT REFERENCES resources(id),
-        notes TEXT
+        notes TEXT,
+        group_index INTEGER,
+        source_cell_text TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS schedule_entry_slots (
         schedule_entry_id TEXT NOT NULL REFERENCES schedule_entries(id) ON DELETE CASCADE,
         time_slot_id TEXT NOT NULL REFERENCES time_slots(id),
         PRIMARY KEY (schedule_entry_id, time_slot_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS schedule_entry_resources (
+        schedule_entry_id TEXT NOT NULL REFERENCES schedule_entries(id) ON DELETE CASCADE,
+        resource_id TEXT NOT NULL REFERENCES resources(id),
+        PRIMARY KEY (schedule_entry_id, resource_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS resource_allocations (
+        id TEXT PRIMARY KEY,
+        academic_year TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        source_import_id TEXT,
+        day_of_week INTEGER NOT NULL,
+        subject_or_activity TEXT NOT NULL,
+        section TEXT,
+        notes TEXT,
+        source_cell_text TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS resource_allocation_slots (
+        allocation_id TEXT NOT NULL REFERENCES resource_allocations(id) ON DELETE CASCADE,
+        time_slot_id TEXT NOT NULL REFERENCES time_slots(id),
+        PRIMARY KEY (allocation_id, time_slot_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS resource_allocation_resources (
+        allocation_id TEXT NOT NULL REFERENCES resource_allocations(id) ON DELETE CASCADE,
+        resource_id TEXT NOT NULL REFERENCES resources(id),
+        PRIMARY KEY (allocation_id, resource_id)
+    )"""
 ]
 
 

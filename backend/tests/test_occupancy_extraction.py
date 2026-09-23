@@ -421,24 +421,17 @@ class TestResourceOccupancyExtraction:
             activity_candidates=[ActivityCandidate(code="Lab", inferred_type="LAB", is_tokenization_ambiguous=False)],
             teacher_candidates=[TeacherCandidate(acronym="T1", normalized_acronym="T1")],
             resource_candidates=[
-                ResourceCandidate(code="LAB1A", normalized_code="LAB1A"),
-                ResourceCandidate(code="LAB1B", normalized_code="LAB1B"),
+                # is_assignment_ambiguous=True marks slash-alternative resources (one of N, choice unclear)
+                ResourceCandidate(code="LAB1A", normalized_code="LAB1A", is_assignment_ambiguous=True),
+                ResourceCandidate(code="LAB1B", normalized_code="LAB1B", is_assignment_ambiguous=True),
             ],
             source_location=_create_source_location(),
             original_text="Lab\n(T1)\n(LAB1A) or (LAB1B)",
-            issues=[
-                ValidationIssue(
-                    severity=ValidationSeverity.ERROR,
-                    code="AMBIGUOUS_RESOURCE_SINGLE_ACTIVITY",
-                    message="Unclear which resource allocated",
-                    affected_entities={"type": "resource"}
-                )
-            ]
         )
 
         result = OccupancyExtractor.extract_occupancy(block)
 
-        # Resource extraction extracts multiple resources as AMBIGUOUS
+        # Slash-alternative resources extracted as AMBIGUOUS
         assert len(result.resource_occupancies) == 2
         assert all(occ.status.name == "AMBIGUOUS" for occ in result.resource_occupancies)
         assert len(result.teacher_occupancies) == 1  # Teacher still extracted

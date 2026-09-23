@@ -76,8 +76,9 @@ def docx_preview_to_canonical(preview: DOCXImportPreview) -> CanonicalTimetable:
             entry_type=resolved.entry_type,  # type: ignore[arg-type]
             subject_or_activity=resolved.subject_or_activity,
             section=resolved.section,
-            room=resolved.resource_code,  # Map to legacy room field for compatibility
-            notes=None,
+            room=resolved.resource_code,  # Provenance text (comma-joined), legacy compat
+            resource_codes=list(resolved.resource_codes),  # Individual codes (authoritative)
+            notes=resolved.notes,  # Carries "External: Ind*" when applicable
             slot_range=slot_range,
         )
         activities.append(activity)
@@ -97,6 +98,9 @@ def docx_preview_to_canonical(preview: DOCXImportPreview) -> CanonicalTimetable:
     program_name = "Master of Computer Applications" if "computer" in preview.department.lower() else preview.department
 
     for acronym in sorted(teacher_acronyms):
+        # Skip empty acronyms (resource-only / external-only blocks)
+        if not acronym:
+            continue
         teacher = TeacherIdentity(
             acronym=acronym,
             name=faculty_legend_map.get(acronym, acronym),

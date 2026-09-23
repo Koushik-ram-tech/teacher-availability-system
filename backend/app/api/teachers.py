@@ -130,7 +130,7 @@ def search_teachers(
     if department:
         dept = department.strip()
         stmt = stmt.where(Teacher.department.ilike(dept))
-    
+
     stmt = stmt.order_by(Teacher.name).limit(25)
     return list(db.scalars(stmt).all())
 
@@ -644,6 +644,29 @@ def confirm_timetable(
                 "errors": validation_errors,
             },
         )
+
+    # Step 3.5 — Check for resource conflicts across the system
+    from app.services.availability import check_resource_conflicts
+    for entry in draft.entries:
+        if not entry.resource_links:
+            continue
+
+        resource_ids = [r.resource_id for r in entry.resource_links]
+        slot_ids = [s.time_slot_id for s in entry.slot_links]
+
+        has_conflict, error_msg = check_resource_conflicts(
+            db=db,
+            academic_year=draft.academic_year,
+            resource_ids=resource_ids,
+            day_of_week=entry.day_of_week,
+            time_slot_ids=slot_ids,
+            ignore_timetable_id=draft.id
+        )
+        if has_conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Resource conflict for '{entry.subject_or_activity}': {error_msg}"
+            )
 
     # Step 4 — Promote: update status + stamp last_verified_at.
     now_utc = datetime.now(timezone.utc)

@@ -380,9 +380,14 @@ export interface DOCXUnresolvedBlock {
   activity_semantic_status: string;   // 'RESOLVED' | 'AMBIGUOUS' | 'MISSING'
   teacher_occupancy_status: string;   // 'DETERMINISTIC' | 'AMBIGUOUS' | 'UNSPECIFIED'
   resource_occupancy_status: string;  // 'DETERMINISTIC' | 'AMBIGUOUS' | 'UNSPECIFIED'
+  // Activity participation policy
+  participation_policy: string;       // 'STUDENT_MANAGED' | 'FACULTY_MANAGED' | 'EXTERNAL' | 'UNKNOWN'
+  // True when activity is student-managed (Placement, VAC, etc.) — teacher absence is intentional
+  is_student_managed: boolean;
   ambiguity_reason: string;
   // True only when teacher or resource allocation is genuinely ambiguous.
   // Activity semantic ambiguity alone does NOT set this to true.
+  // STUDENT_MANAGED: teacher absence does NOT set this to true.
   resolution_required: boolean;
 }
 
@@ -438,7 +443,9 @@ export interface DOCXImportPreview {
 export interface DOCXManualResolutionInput {
   block_id: string;
   selected_activity: string;
-  selected_teacher: string;
+  /** Optional for student-managed activities (Placement, VAC, etc.).
+   *  Pass null or empty string when no faculty teacher is assigned by design. */
+  selected_teacher: string | null;
   selected_resource?: string | null;
   entry_type?: string;
   notes?: string | null;

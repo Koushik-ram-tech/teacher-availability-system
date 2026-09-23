@@ -21,6 +21,12 @@ from .staging import (
 )
 from .parser import parse_docx_timetable
 from .converter import convert_preview_to_canonical
+from .participation_policy import (
+    ActivityParticipationPolicy,
+    classify_activity,
+    is_student_managed,
+    DEFAULT_POLICY_MAP,
+)
 from .manual_resolution import (
     apply_manual_resolution,
     apply_multiple_resolutions,
@@ -39,6 +45,10 @@ __all__ = [
     "ExcludedCandidate",
     "parse_docx_timetable",
     "convert_preview_to_canonical",
+    "ActivityParticipationPolicy",
+    "classify_activity",
+    "is_student_managed",
+    "DEFAULT_POLICY_MAP",
     "apply_manual_resolution",
     "apply_multiple_resolutions",
     "finalize_block_resolution",

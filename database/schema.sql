@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
     section TEXT,
     room TEXT,
     notes TEXT,
+    group_index SMALLINT,
+    source_cell_text TEXT,
     CONSTRAINT schedule_entries_activity_not_blank CHECK (btrim(subject_or_activity) <> '')
 );
 
@@ -122,6 +124,19 @@ CREATE TABLE IF NOT EXISTS schedule_entry_slots (
     schedule_entry_id UUID NOT NULL REFERENCES schedule_entries(id) ON DELETE CASCADE,
     time_slot_id UUID NOT NULL REFERENCES time_slots(id),
     PRIMARY KEY (schedule_entry_id, time_slot_id)
+);
+
+-- ------------------------------------------------------------
+-- Entry-to-resource mapping (many-to-many)
+-- ------------------------------------------------------------
+-- A single activity group may co-occupy multiple resources
+-- (e.g. SU,DNS → CA3 and FDC simultaneously).
+-- This is the authoritative table for resource occupancy queries.
+-- schedule_entries.resource_id is retained for single-resource backwards compat.
+CREATE TABLE IF NOT EXISTS schedule_entry_resources (
+    schedule_entry_id UUID NOT NULL REFERENCES schedule_entries(id) ON DELETE CASCADE,
+    resource_id       UUID NOT NULL REFERENCES resources(id),
+    PRIMARY KEY (schedule_entry_id, resource_id)
 );
 
 -- ------------------------------------------------------------
@@ -233,3 +248,39 @@ ON timetables
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION trg_validate_timetable_confirmation();
+
+-- ------------------------------------------------------------
+-- External Resource Allocations (Ind* / Unowned Groups)
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS resource_allocations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    academic_year VARCHAR NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'DRAFT',
+    source_import_id VARCHAR,
+    day_of_week SMALLINT NOT NULL,
+    subject_or_activity VARCHAR NOT NULL,
+    section VARCHAR,
+    notes VARCHAR,
+    source_cell_text VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT resource_allocations_subject_not_blank CHECK (btrim(subject_or_activity) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS resource_allocation_slots (
+    allocation_id UUID NOT NULL REFERENCES resource_allocations(id) ON DELETE CASCADE,
+    time_slot_id UUID NOT NULL REFERENCES time_slots(id),
+    PRIMARY KEY (allocation_id, time_slot_id)
+);
+
+CREATE TABLE IF NOT EXISTS resource_allocation_resources (
+    allocation_id UUID NOT NULL REFERENCES resource_allocations(id) ON DELETE CASCADE,
+    resource_id UUID NOT NULL REFERENCES resources(id),
+    PRIMARY KEY (allocation_id, resource_id)
+);
+
+-- Performance indexes
+CREATE INDEX idx_resource_allocations_academic_year ON resource_allocations(academic_year);
+CREATE INDEX idx_resource_allocations_status ON resource_allocations(status);
+CREATE INDEX idx_res_alloc_res_resource_id ON resource_allocation_resources(resource_id);

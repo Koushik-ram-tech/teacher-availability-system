@@ -223,6 +223,8 @@ def canonical_to_import_preview(canonical: CanonicalTimetable) -> ImportPreview:
             section=activity.section,
             room=activity.room,
             notes=activity.notes,
+            group_index=activity.group_index,
+            source_cell_text=activity.source_cell_text,
             warnings=warnings,
         )
         

@@ -96,10 +96,22 @@ class UnresolvedBlock(BaseModel):
     teacher_occupancy_status: str = "UNSPECIFIED"  # DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
     resource_occupancy_status: str = "UNSPECIFIED"  # DETERMINISTIC | AMBIGUOUS | UNSPECIFIED
 
+    # Activity participation policy (from participation_policy module).
+    # "STUDENT_MANAGED" = teacher absence is intentional (Placement, VAC, etc.)
+    # "FACULTY_MANAGED" = normal faculty-led activity; teacher expected
+    # "EXTERNAL" = industry/guest led
+    # "UNKNOWN" = not classified
+    participation_policy: str = "UNKNOWN"
+
+    # Convenience flag derived from participation_policy.
+    # True when participation_policy == "STUDENT_MANAGED".
+    is_student_managed: bool = False
+
     # Ambiguity reason (human-readable summary)
     ambiguity_reason: str
     # resolution_required = True only when teacher or resource allocation is genuinely ambiguous.
     # Activity semantic ambiguity alone does NOT set this to True.
+    # STUDENT_MANAGED blocks: teacher absence does NOT set resolution_required.
     resolution_required: bool = False
 
 
@@ -122,12 +134,17 @@ class ResolvedActivity(BaseModel):
     teacher_acronym: str
     subject_or_activity: str
     resource_code: str | None = None
+    resource_codes: list[str] = []  # Individual resource codes for persistence (authoritative)
     source_location: str
     entry_type: str = "CLASS"  # CLASS, LAB, OTHER
 
     # Metadata
     is_multi_slot: bool = False
     is_manually_resolved: bool = False
+
+    # Optional notes — used to carry external participant info (e.g. "External: Ind*")
+    # without creating a Teacher DB row. Also used for group-level annotations.
+    notes: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +227,10 @@ class ManualResolutionInput(BaseModel):
 
     # Explicit selections (by code/acronym)
     selected_activity: str
-    selected_teacher: str
+    # selected_teacher is OPTIONAL for student-managed activities (Placement, VAC, etc.).
+    # For normal faculty activities, teacher is expected.
+    # Pass None or empty string when activity is student-managed and no teacher is assigned.
+    selected_teacher: str | None = None
     selected_resource: str | None = None
 
     # Optional metadata

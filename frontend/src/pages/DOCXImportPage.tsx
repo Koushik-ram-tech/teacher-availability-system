@@ -430,7 +430,22 @@ function UnresolvedBlocksTable({
                 </td>
                 <td>
                   <OccupancyBadge status={block.teacher_occupancy_status} kind="teacher" />
-                  {block.teacher_candidates.length > 0 && (
+                  {block.is_student_managed ? (
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.85em' }}>
+                      <span
+                        title="Teacher absence is intentional for this activity"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          color: 'var(--color-muted)',
+                          fontStyle: 'italic'
+                        }}
+                      >
+                        🎓 None (student-managed activity)
+                      </span>
+                    </div>
+                  ) : block.teacher_candidates.length > 0 ? (
                     <ul className="candidate-list" style={{ marginTop: '0.25rem' }}>
                       {block.teacher_candidates.map((t, i) => (
                         <li key={i}>
@@ -439,7 +454,7 @@ function UnresolvedBlocksTable({
                         </li>
                       ))}
                     </ul>
-                  )}
+                  ) : null}
                 </td>
                 <td>
                   <OccupancyBadge status={block.resource_occupancy_status} kind="resource" />
@@ -704,14 +719,20 @@ function PreviewPhase({
   };
 
   async function handleResolve() {
-    if (!resolvingBlock || !resolutionInputs.selected_activity || !resolutionInputs.selected_teacher) {
+    // For student-managed blocks (Placement, VAC, etc.), teacher is optional.
+    // For faculty-managed blocks, teacher is required.
+    const teacherRequired = resolvingBlock && !resolvingBlock.is_student_managed;
+    if (!resolvingBlock || !resolutionInputs.selected_activity) {
+      return;
+    }
+    if (teacherRequired && !resolutionInputs.selected_teacher) {
       return;
     }
 
     const resolution: DOCXManualResolutionInput = {
       block_id: resolvingBlock.block_id,
       selected_activity: resolutionInputs.selected_activity,
-      selected_teacher: resolutionInputs.selected_teacher,
+      selected_teacher: resolutionInputs.selected_teacher ?? null,
       selected_resource: resolutionInputs.selected_resource || null,
       entry_type: resolutionInputs.entry_type || 'CLASS',
     };
@@ -835,24 +856,44 @@ function PreviewPhase({
               </label>
 
               <label style={{ marginTop: '1rem', display: 'block' }}>
-                <strong>Teacher:</strong>
-                <select
-                  value={resolutionInputs.selected_teacher || ''}
-                  onChange={(e) => setResolutionInputs({ ...resolutionInputs, selected_teacher: e.target.value })}
-                  style={{ display: 'block', width: '100%', marginTop: '0.5rem', padding: '0.5rem' }}
-                >
-                  <option value="">-- Select teacher --</option>
-                  {resolvingBlock.teacher_candidates.map((t, i) => (
-                    <option key={i} value={t.acronym}>
-                      {t.acronym} {t.name && `(${t.name})`}
-                    </option>
-                  ))}
-                </select>
+                <strong>Teacher:{resolvingBlock.is_student_managed ? '' : ' *'}</strong>
+                {resolvingBlock.is_student_managed ? (
+                  <div
+                    style={{
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      background: 'var(--color-bg-subtle, #f0f9ff)',
+                      border: '1px solid var(--color-border-info, #bae6fd)',
+                      borderRadius: '6px',
+                      fontSize: '0.9em',
+                      color: 'var(--color-info, #0369a1)',
+                    }}
+                  >
+                    🎓 <strong>Student-managed activity</strong> — no faculty teacher assigned by design.
+                    <br />
+                    <span style={{ color: 'var(--color-muted)', marginTop: '0.25rem', display: 'block' }}>
+                      Teacher assignment is not required for this block.
+                    </span>
+                  </div>
+                ) : (
+                  <select
+                    value={resolutionInputs.selected_teacher || ''}
+                    onChange={(e) => setResolutionInputs({ ...resolutionInputs, selected_teacher: e.target.value })}
+                    style={{ display: 'block', width: '100%', marginTop: '0.5rem', padding: '0.5rem' }}
+                  >
+                    <option value="">-- Select teacher --</option>
+                    {resolvingBlock.teacher_candidates.map((t, i) => (
+                      <option key={i} value={t.acronym}>
+                        {t.acronym} {t.name && `(${t.name})`}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </label>
 
               {resolvingBlock.resource_candidates.length > 0 && (
                 <label style={{ marginTop: '1rem', display: 'block' }}>
-                  <strong>Resource (optional):</strong>
+                  <strong>Resource {resolvingBlock.is_student_managed ? '(required — resolves ambiguity)' : '(optional)'}:</strong>
                   <select
                     value={resolutionInputs.selected_resource || ''}
                     onChange={(e) => setResolutionInputs({ ...resolutionInputs, selected_resource: e.target.value })}
@@ -889,7 +930,11 @@ function PreviewPhase({
               <button
                 className="import-primary-btn"
                 onClick={handleResolve}
-                disabled={!resolutionInputs.selected_activity || !resolutionInputs.selected_teacher || resolving}
+                disabled={
+                  !resolutionInputs.selected_activity ||
+                  (!resolvingBlock.is_student_managed && !resolutionInputs.selected_teacher) ||
+                  resolving
+                }
               >
                 {resolving ? 'Resolving…' : 'Apply Resolution'}
               </button>

@@ -188,12 +188,14 @@ def resolve_blocks(
             errors.append(f"Block '{resolution.block_id}' not found")
             continue
 
-        # Create resolved activity
+        # Create resolved activity.
+        # teacher_acronym: empty string ("") = intentionally no teacher (student-managed).
+        # For student-managed blocks, selected_teacher may be None/empty — that is valid.
         resolved = ResolvedActivity(
             day=block_data.day,
             section=block_data.section,
             slots=block_data.slots,
-            teacher_acronym=resolution.selected_teacher,
+            teacher_acronym=resolution.selected_teacher or "",
             subject_or_activity=resolution.selected_activity,
             resource_code=resolution.selected_resource,
             source_location=block_data.source_location,
@@ -303,21 +305,147 @@ def _convert_parser_to_api_preview(
         combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or "Unknown Activity"
         entry_type = block.activity_candidates[0].inferred_type if block.activity_candidates else "CLASS"
         combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
+        combined_resource_codes = [rc.code for rc in block.resource_candidates]
 
-        for teacher in block.teacher_candidates:
-            resolved = ResolvedActivity(
-                day=block.day,
-                section=block.section,
-                slots=block.slots,
-                teacher_acronym=teacher.normalized_acronym,
-                subject_or_activity=combined_activity,
-                resource_code=combined_resource,
-                source_location=source_loc_str,
-                entry_type=entry_type,
-                is_multi_slot=len(block.slots) > 1,
-                is_manually_resolved=False,
-            )
-            resolved_activities.append(resolved)
+        # Produce one resolved entry per FACULTY/NAME_ONLY teacher.
+        # EXTERNAL participants (Ind*, industry persons) are not faculty teachers —
+        # they are preserved in the notes field and do NOT create Teacher DB rows.
+        faculty_teachers = [
+            t for t in block.teacher_candidates
+            if getattr(t, "role", "FACULTY") in ("FACULTY",) or getattr(t, "is_name_only", False)
+        ]
+        external_participants = [
+            t for t in block.teacher_candidates
+            if getattr(t, "role", "FACULTY") == "EXTERNAL"
+        ]
+        external_notes = (
+            "External: " + ", ".join(t.raw_token or t.acronym for t in external_participants)
+            if external_participants else None
+        )
+
+        # ---------------------------------------------------------------
+        # Multi-group cells: emit one activity per teacher per group,
+        # linked to the group-specific resource. No cross-group association.
+        # Single-group cells: existing flat behavior unchanged.
+        # ---------------------------------------------------------------
+        groups = getattr(block, 'activity_groups', [])
+
+        if len(groups) > 1:
+            for group in groups:
+                grp_activity = (
+                    ", ".join(ac.code for ac in group.activity_candidates)
+                    or combined_activity
+                )
+                grp_entry_type = (
+                    group.activity_candidates[0].inferred_type
+                    if group.activity_candidates else entry_type
+                )
+                # resource_code: comma-joined provenance text
+                # resource_codes: individual codes for separate persistence
+                grp_resource_text = (
+                    ", ".join(rc.code for rc in group.resource_candidates)
+                    if group.resource_candidates else None
+                )
+                grp_resource_codes = [rc.code for rc in group.resource_candidates]
+                grp_faculty = [
+                    t for t in group.teacher_candidates
+                    if getattr(t, "role", "FACULTY") in ("FACULTY",) or getattr(t, "is_name_only", False)
+                ]
+                grp_external = [
+                    t for t in group.teacher_candidates
+                    if getattr(t, "role", "FACULTY") == "EXTERNAL"
+                ]
+                grp_notes = (
+                    "External: " + ", ".join(t.raw_token or t.acronym for t in grp_external)
+                    if grp_external else None
+                )
+                if grp_faculty:
+                    for teacher in grp_faculty:
+                        resolved_activities.append(ResolvedActivity(
+                            day=block.day, section=block.section, slots=block.slots,
+                            teacher_acronym=teacher.normalized_acronym,
+                            subject_or_activity=grp_activity,
+                            resource_code=grp_resource_text,
+                            resource_codes=grp_resource_codes,
+                            source_location=source_loc_str, entry_type=grp_entry_type,
+                            is_multi_slot=len(block.slots) > 1, is_manually_resolved=False,
+                            notes=grp_notes,
+                        ))
+                elif grp_external:
+                    resolved_activities.append(ResolvedActivity(
+                        day=block.day, section=block.section, slots=block.slots,
+                        teacher_acronym="", subject_or_activity=grp_activity,
+                        resource_code=grp_resource_text,
+                        resource_codes=grp_resource_codes,
+                        source_location=source_loc_str,
+                        entry_type=grp_entry_type, is_multi_slot=len(block.slots) > 1,
+                        is_manually_resolved=False, notes=grp_notes,
+                    ))
+                else:
+                    resolved_activities.append(ResolvedActivity(
+                        day=block.day, section=block.section, slots=block.slots,
+                        teacher_acronym="", subject_or_activity=grp_activity,
+                        resource_code=grp_resource_text,
+                        resource_codes=grp_resource_codes,
+                        source_location=source_loc_str,
+                        entry_type=grp_entry_type, is_multi_slot=len(block.slots) > 1,
+                        is_manually_resolved=False,
+                    ))
+        else:
+            # Single-group (most common): existing flat path
+            if faculty_teachers:
+                for teacher in faculty_teachers:
+                    resolved = ResolvedActivity(
+                        day=block.day,
+                        section=block.section,
+                        slots=block.slots,
+                        teacher_acronym=teacher.normalized_acronym,
+                        subject_or_activity=combined_activity,
+                        resource_code=combined_resource,
+                        resource_codes=combined_resource_codes,
+                        source_location=source_loc_str,
+                        entry_type=entry_type,
+                        is_multi_slot=len(block.slots) > 1,
+                        is_manually_resolved=False,
+                        notes=external_notes,
+                    )
+                    resolved_activities.append(resolved)
+            elif external_participants:
+                # External-only block: no faculty teacher but external participants present.
+                # Preserve resource occupancy; notes carry the external identity.
+                resolved = ResolvedActivity(
+                    day=block.day,
+                    section=block.section,
+                    slots=block.slots,
+                    teacher_acronym="",
+                    subject_or_activity=combined_activity,
+                    resource_code=combined_resource,
+                    resource_codes=combined_resource_codes,
+                    source_location=source_loc_str,
+                    entry_type=entry_type,
+                    is_multi_slot=len(block.slots) > 1,
+                    is_manually_resolved=False,
+                    notes=external_notes,
+                )
+                resolved_activities.append(resolved)
+            else:
+                # Resource-only block (no faculty teachers, no external): preserve resource occupancy
+                # without inventing a teacher. teacher_acronym="" = unspecified.
+                resolved = ResolvedActivity(
+                    day=block.day,
+                    section=block.section,
+                    slots=block.slots,
+                    teacher_acronym="",
+                    subject_or_activity=combined_activity,
+                    resource_code=combined_resource,
+                    resource_codes=combined_resource_codes,
+                    source_location=source_loc_str,
+                    entry_type=entry_type,
+                    is_multi_slot=len(block.slots) > 1,
+                    is_manually_resolved=False,
+                )
+                resolved_activities.append(resolved)
+
 
     # Convert unresolved blocks (from occupancy_review_blocks)
     unresolved_blocks = []
@@ -349,14 +477,21 @@ def _convert_parser_to_api_preview(
             for c in block.resource_candidates
         ]
 
-        # Compute ambiguity reason and resolution_required based on occupancy statuses
+        # Compute ambiguity reason and resolution_required based on occupancy statuses.
+        # STUDENT_MANAGED: teacher absence is intentional — not flagged as a problem.
+        participation_policy = getattr(block, 'participation_policy', 'UNKNOWN')
+        is_student_managed_block = (participation_policy == "STUDENT_MANAGED")
+
         reasons = []
         resolution_required = False
         if block.teacher_occupancy_status == "AMBIGUOUS":
             reasons.append("teacher allocation ambiguous")
             resolution_required = True
-        elif block.teacher_occupancy_status == "UNSPECIFIED":
+        elif block.teacher_occupancy_status == "UNSPECIFIED" and not is_student_managed_block:
+            # Only flag "no teacher" as a concern for faculty-managed activities.
             reasons.append("no teacher specified")
+        elif block.teacher_occupancy_status == "UNSPECIFIED" and is_student_managed_block:
+            reasons.append("student-managed activity (no faculty teacher by design)")
         if block.resource_occupancy_status == "AMBIGUOUS":
             reasons.append("resource allocation ambiguous")
             resolution_required = True
@@ -389,6 +524,8 @@ def _convert_parser_to_api_preview(
             activity_semantic_status=block.activity_semantic_status,
             teacher_occupancy_status=block.teacher_occupancy_status,
             resource_occupancy_status=block.resource_occupancy_status,
+            participation_policy=participation_policy,
+            is_student_managed=is_student_managed_block,
             ambiguity_reason=ambiguity_reason,
             resolution_required=resolution_required,
         )

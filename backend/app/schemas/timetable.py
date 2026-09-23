@@ -81,7 +81,10 @@ class ScheduleEntryIn(BaseModel):
     subject_or_activity: str | None = Field(default=None, max_length=500)
     section: str | None = Field(default=None, max_length=100)
     room: str | None = Field(default=None, max_length=100)
+    resource_codes: list[str] = Field(default_factory=list)  # Individual resource codes
     notes: str | None = Field(default=None, max_length=1000)
+    group_index: int | None = Field(default=None)
+    source_cell_text: str | None = Field(default=None)
 
     @field_validator("slot_ids")
     @classmethod

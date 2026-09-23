@@ -96,10 +96,13 @@ class ScheduleEntry(Base):
     room: Mapped[Optional[str]] = mapped_column(String)
     notes: Mapped[Optional[str]] = mapped_column(String)
     resource_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resources.id"), nullable=True)
+    group_index: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    source_cell_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     timetable: Mapped[Timetable] = relationship(back_populates="entries")
     slot_links: Mapped[list["ScheduleEntrySlot"]] = relationship(back_populates="schedule_entry", cascade="all, delete-orphan")
     resource: Mapped[Optional["Resource"]] = relationship(back_populates="schedule_entries")
+    resource_links: Mapped[list["ScheduleEntryResource"]] = relationship(back_populates="schedule_entry", cascade="all, delete-orphan")
 
 
 class ScheduleEntrySlot(Base):
@@ -110,6 +113,29 @@ class ScheduleEntrySlot(Base):
 
     schedule_entry: Mapped[ScheduleEntry] = relationship(back_populates="slot_links")
     time_slot: Mapped[TimeSlot] = relationship(back_populates="entry_links")
+
+
+class ScheduleEntryResource(Base):
+    """Many-to-many join between ScheduleEntry and Resource.
+
+    Authoritative source for resource occupancy queries.
+    Replaces the singular resource_id FK for multi-resource activity groups.
+    """
+    __tablename__ = "schedule_entry_resources"
+
+    schedule_entry_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("schedule_entries.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    resource_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("resources.id"),
+        primary_key=True,
+    )
+
+    schedule_entry: Mapped["ScheduleEntry"] = relationship(back_populates="resource_links")
+    resource: Mapped["Resource"] = relationship(back_populates="entry_links")
 
 
 class Resource(Base):
@@ -133,6 +159,8 @@ class Resource(Base):
 
     aliases: Mapped[list["ResourceAlias"]] = relationship(back_populates="resource", cascade="all, delete-orphan")
     schedule_entries: Mapped[list[ScheduleEntry]] = relationship(back_populates="resource")
+    entry_links: Mapped[list["ScheduleEntryResource"]] = relationship(back_populates="resource")
+    allocation_links: Mapped[list["ResourceAllocationResource"]] = relationship(back_populates="resource")
 
 
 class ResourceAlias(Base):
@@ -149,3 +177,43 @@ class ResourceAlias(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
     resource: Mapped[Resource] = relationship(back_populates="aliases")
+
+
+class ResourceAllocation(Base):
+    """External resource allocation without a faculty teacher (e.g., Ind* groups)."""
+    __tablename__ = "resource_allocations"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    academic_year: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="DRAFT")  # DRAFT / CONFIRMED
+    source_import_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    day_of_week: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    subject_or_activity: Mapped[str] = mapped_column(String, nullable=False)
+    section: Mapped[Optional[str]] = mapped_column(String)
+    notes: Mapped[Optional[str]] = mapped_column(String)
+    source_cell_text: Mapped[Optional[str]] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    slot_links: Mapped[list["ResourceAllocationSlot"]] = relationship(back_populates="allocation", cascade="all, delete-orphan")
+    resource_links: Mapped[list["ResourceAllocationResource"]] = relationship(back_populates="allocation", cascade="all, delete-orphan")
+
+
+class ResourceAllocationSlot(Base):
+    __tablename__ = "resource_allocation_slots"
+
+    allocation_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resource_allocations.id", ondelete="CASCADE"), primary_key=True)
+    time_slot_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("time_slots.id"), primary_key=True)
+
+    allocation: Mapped[ResourceAllocation] = relationship(back_populates="slot_links")
+    time_slot: Mapped[TimeSlot] = relationship()
+
+
+class ResourceAllocationResource(Base):
+    __tablename__ = "resource_allocation_resources"
+
+    allocation_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resource_allocations.id", ondelete="CASCADE"), primary_key=True)
+    resource_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("resources.id"), primary_key=True)
+
+    allocation: Mapped[ResourceAllocation] = relationship(back_populates="resource_links")
+    resource: Mapped["Resource"] = relationship(back_populates="allocation_links")

@@ -11,13 +11,16 @@ FREE is derived as: working_slots - occupied_slots
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.models import Resource, ResourceAlias, ScheduleEntry, ScheduleEntrySlot, Teacher, TimeSlot, Timetable
+from app.models.models import (
+    Resource, ResourceAlias, ScheduleEntry, ScheduleEntryResource, ScheduleEntrySlot,
+    Teacher, TimeSlot, Timetable, ResourceAllocation, ResourceAllocationSlot, ResourceAllocationResource
+)
 from app.core.schedule_config import ISO_TO_DAY_NAME
 
 
@@ -188,17 +191,19 @@ class AvailabilityService:
         if not resource:
             return None
 
-        # Get all schedule entries that use this resource
+        # Get all schedule entries that use this resource via the join table.
+        # The join table is authoritative for multi-resource cases.
         entries = db.scalars(
             select(ScheduleEntry)
+            .join(
+                ScheduleEntryResource,
+                ScheduleEntryResource.schedule_entry_id == ScheduleEntry.id,
+            )
+            .where(ScheduleEntryResource.resource_id == resource_id)
             .options(
                 selectinload(ScheduleEntry.slot_links)
                 .selectinload(ScheduleEntrySlot.time_slot),
                 selectinload(ScheduleEntry.timetable)
-            )
-            .where(
-                ScheduleEntry.resource_id == resource_id,
-                # Join to timetable to filter by academic year and status
             )
         ).all()
 
@@ -209,8 +214,29 @@ class AvailabilityService:
             and entry.timetable.status == "CONFIRMED"
         ]
 
+        # Get all external resource allocations that use this resource
+        allocations = db.scalars(
+            select(ResourceAllocation)
+            .join(
+                ResourceAllocationResource,
+                ResourceAllocationResource.allocation_id == ResourceAllocation.id,
+            )
+            .where(
+                ResourceAllocationResource.resource_id == resource.id,
+                ResourceAllocation.academic_year == academic_year,
+                ResourceAllocation.status == "CONFIRMED"
+            )
+            .options(
+                selectinload(ResourceAllocation.slot_links)
+                .selectinload(ResourceAllocationSlot.time_slot)
+            )
+        ).all()
+
+        # Combine both faculty-backed and external-only entries
+        all_confirmed: list[Any] = confirmed_entries + list(allocations)
+
         # Build occupancy map from entries
-        occupancy_map = cls._build_occupancy_map(confirmed_entries)
+        occupancy_map = cls._build_occupancy_map(all_confirmed)
 
         # Determine which days to include
         days_to_include = [day] if day else WORKING_DAYS
@@ -323,15 +349,15 @@ class AvailabilityService:
     @classmethod
     def _build_occupancy_map(
         cls,
-        entries: list[ScheduleEntry]
-    ) -> dict[str, dict[str, ScheduleEntry]]:
-        """Build occupancy map from schedule entries.
+        entries: list[Any]
+    ) -> dict[str, dict[str, Any]]:
+        """Build occupancy map from schedule entries or resource allocations.
 
         Args:
-            entries: List of ScheduleEntry objects with loaded slot_links
+            entries: List of ScheduleEntry or ResourceAllocation objects with loaded slot_links
 
         Returns:
-            Nested dict: day → slot_code → ScheduleEntry
+            Nested dict: day → slot_code → entry
         """
         occupancy_map = {}
 
@@ -357,13 +383,13 @@ class AvailabilityService:
     def _build_day_availability(
         cls,
         day: str,
-        occupancy: dict[str, ScheduleEntry]
+        occupancy: dict[str, Any]
     ) -> DayAvailability:
         """Build availability for a single day.
 
         Args:
             day: ISO day name
-            occupancy: Dict of slot_code → ScheduleEntry for occupied slots
+            occupancy: Dict of slot_code → Entry for occupied slots
 
         Returns:
             DayAvailability with FREE/OCCUPIED status for all working slots
@@ -379,7 +405,7 @@ class AvailabilityService:
                     status="OCCUPIED",
                     subject_or_activity=entry.subject_or_activity,
                     section=entry.section,
-                    room=entry.room
+                    room=getattr(entry, 'room', None)
                 )
             else:
                 # Slot is FREE (no occupancy)
@@ -392,3 +418,71 @@ class AvailabilityService:
             day=day,
             slots=slots
         )
+
+def check_resource_conflicts(
+    db: Session,
+    academic_year: str,
+    resource_ids: list[UUID],
+    day_of_week: int,
+    time_slot_ids: list[UUID],
+    ignore_timetable_id: Optional[UUID] = None
+) -> tuple[bool, Optional[str]]:
+    """Check if any of the given resources are already occupied at the given slots.
+
+    Args:
+        db: Database session
+        academic_year: The academic year
+        resource_ids: List of resource UUIDs to check
+        day_of_week: ISO day of week (1=Monday...7=Sunday)
+        time_slot_ids: List of time slot UUIDs to check
+        ignore_timetable_id: If replacing a timetable, ignore its current confirmed entries
+
+    Returns:
+        (has_conflict, error_message)
+    """
+    if not resource_ids or not time_slot_ids:
+        return False, None
+
+    # Check faculty-backed confirmed entries
+    query_se = (
+        select(ScheduleEntryResource.resource_id, TimeSlot.code)
+        .join(ScheduleEntry, ScheduleEntry.id == ScheduleEntryResource.schedule_entry_id)
+        .join(Timetable, Timetable.id == ScheduleEntry.timetable_id)
+        .join(ScheduleEntrySlot, ScheduleEntrySlot.schedule_entry_id == ScheduleEntry.id)
+        .join(TimeSlot, TimeSlot.id == ScheduleEntrySlot.time_slot_id)
+        .where(
+            Timetable.academic_year == academic_year,
+            Timetable.status == "CONFIRMED",
+            ScheduleEntry.day_of_week == day_of_week,
+            ScheduleEntryResource.resource_id.in_(resource_ids),
+            ScheduleEntrySlot.time_slot_id.in_(time_slot_ids)
+        )
+    )
+    if ignore_timetable_id:
+        query_se = query_se.where(Timetable.id != ignore_timetable_id)
+
+    conflict_se = db.execute(query_se).first()
+    if conflict_se:
+        r_id, s_code = conflict_se
+        return True, f"Resource is already occupied by a confirmed teacher timetable at slot {s_code}."
+
+    # Check external resource allocations
+    query_ra = (
+        select(ResourceAllocationResource.resource_id, TimeSlot.code)
+        .join(ResourceAllocation, ResourceAllocation.id == ResourceAllocationResource.allocation_id)
+        .join(ResourceAllocationSlot, ResourceAllocationSlot.allocation_id == ResourceAllocation.id)
+        .join(TimeSlot, TimeSlot.id == ResourceAllocationSlot.time_slot_id)
+        .where(
+            ResourceAllocation.academic_year == academic_year,
+            ResourceAllocation.status == "CONFIRMED",
+            ResourceAllocation.day_of_week == day_of_week,
+            ResourceAllocationResource.resource_id.in_(resource_ids),
+            ResourceAllocationSlot.time_slot_id.in_(time_slot_ids)
+        )
+    )
+    conflict_ra = db.execute(query_ra).first()
+    if conflict_ra:
+        r_id, s_code = conflict_ra
+        return True, f"Resource is already occupied by an external participant at slot {s_code}."
+
+    return False, None

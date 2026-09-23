@@ -51,6 +51,11 @@ class TeacherOccupancy:
     # Confidence/reason tracking
     extraction_reason: str = ""  # Why this occupancy was determined
 
+    # EXTERNAL flag: True for industry/guest participants (Ind*, etc.)
+    # External participants occupy the slot but do NOT create Teacher DB rows.
+    # Their presence is preserved in ScheduleActivity.notes.
+    is_external: bool = False
+
     def __hash__(self):
         """Allow use in sets for deduplication."""
         return hash((self.teacher_acronym, self.day, self.slot))
@@ -201,22 +206,63 @@ class OccupancyExtractor:
             result.blocked_reason = "UNRESOLVED_TEACHER_IDENTITY: Cannot resolve teacher acronym"
             return result
 
-        # Case 3: All extracted teachers are considered allocated to this block
-        # regardless of how many activities are present.
-        extraction_reason = "Teacher allocation deterministic from document structure"
-        block.teacher_occupancy_status = "DETERMINISTIC"
+        # Case 3: All extracted teachers allocated to this block.
+        # FACULTY and NAME_ONLY → standard faculty occupancy records.
+        # EXTERNAL (e.g. Ind*) → occupancy records with is_external=True;
+        #   these mark the slot as occupied but do NOT create Teacher DB rows.
+        faculty_candidates = [
+            tc for tc in block.teacher_candidates
+            if tc.role in ("FACULTY",)  # OccupantRole.FACULTY
+        ]
+        # NAME_ONLY counts as faculty for availability
+        name_only_candidates = [
+            tc for tc in block.teacher_candidates
+            if tc.is_name_only
+        ]
+        external_candidates = [
+            tc for tc in block.teacher_candidates
+            if tc.role == "EXTERNAL" and not tc.is_name_only  # OccupantRole.EXTERNAL
+        ]
+        occupied_candidates = faculty_candidates + [
+            tc for tc in name_only_candidates if tc not in faculty_candidates
+        ]
 
-        for teacher_candidate in block.teacher_candidates:
-            occupancies = cls._create_teacher_occupancies(
-                teacher_candidate=teacher_candidate,
-                day=block.day,
-                slots=block.slots,
-                status=OccupancyStatus.OCCUPIED,
-                source_location=block.source_location,
-                original_text=block.original_text,
-                extraction_reason=extraction_reason
-            )
-            result.teacher_occupancies.extend(occupancies)
+        if not occupied_candidates and not external_candidates:
+            # All teachers unrecognised (should be caught by identity check above)
+            block.teacher_occupancy_status = "UNSPECIFIED"
+            result.extraction_successful = True
+            return result
+
+        if occupied_candidates or external_candidates:
+            extraction_reason_faculty = "Teacher allocation deterministic from document structure"
+            extraction_reason_external = "External participant occupancy (Ind* / industry person)"
+            block.teacher_occupancy_status = "DETERMINISTIC"
+
+            for teacher_candidate in occupied_candidates:
+                occupancies = cls._create_teacher_occupancies(
+                    teacher_candidate=teacher_candidate,
+                    day=block.day,
+                    slots=block.slots,
+                    status=OccupancyStatus.OCCUPIED,
+                    source_location=block.source_location,
+                    original_text=block.original_text,
+                    extraction_reason=extraction_reason_faculty,
+                    is_external=False,
+                )
+                result.teacher_occupancies.extend(occupancies)
+
+            for ext_candidate in external_candidates:
+                occupancies = cls._create_teacher_occupancies(
+                    teacher_candidate=ext_candidate,
+                    day=block.day,
+                    slots=block.slots,
+                    status=OccupancyStatus.OCCUPIED,
+                    source_location=block.source_location,
+                    original_text=block.original_text,
+                    extraction_reason=extraction_reason_external,
+                    is_external=True,
+                )
+                result.teacher_occupancies.extend(occupancies)
 
         result.extraction_successful = True
         return result
@@ -247,21 +293,39 @@ class OccupancyExtractor:
             result.blocked_reason = "UNRESOLVED_RESOURCE_IDENTITY: Cannot resolve resource code"
             return result
 
-        # Case 2: Multiple resources generally implies genuine ambiguity for room mapping
-        # unless structurally proven otherwise. We default to AMBIGUOUS.
+        # Case 2: Multiple resources
+        # Distinguish comma-list (all OCCUPIED) from slash-list (AMBIGUOUS)
         if len(block.resource_candidates) > 1:
-            extraction_reason = "Multiple resources listed without explicit mapping"
-            block.resource_occupancy_status = "AMBIGUOUS"
+            # Check if all are comma-separated (deterministic occupancy)
+            # vs slash-separated (genuine alternative)
+            all_deterministic = all(
+                not rc.is_assignment_ambiguous for rc in block.resource_candidates
+            )
+            any_ambiguous = any(
+                rc.is_assignment_ambiguous for rc in block.resource_candidates
+            )
+
+            if any_ambiguous:
+                # Slash-separated alternatives: genuine uncertainty
+                extraction_reason = "Slash-separated resource alternatives — choice unclear"
+                block.resource_occupancy_status = "AMBIGUOUS"
+                status = OccupancyStatus.AMBIGUOUS
+            else:
+                # Comma-separated list: all resources deterministically occupied
+                # (e.g. (CA3, CA2) -> both rooms used for parallel groups)
+                extraction_reason = "Comma-separated resource list — all resources occupied"
+                block.resource_occupancy_status = "DETERMINISTIC"
+                status = OccupancyStatus.OCCUPIED
 
             for resource_candidate in block.resource_candidates:
                 occupancies = cls._create_resource_occupancies(
                     resource_candidate=resource_candidate,
                     day=block.day,
                     slots=block.slots,
-                    status=OccupancyStatus.AMBIGUOUS,
+                    status=status,
                     source_location=block.source_location,
                     original_text=block.original_text,
-                    extraction_reason=extraction_reason
+                    extraction_reason=extraction_reason,
                 )
                 result.resource_occupancies.extend(occupancies)
 
@@ -296,7 +360,8 @@ class OccupancyExtractor:
         status: OccupancyStatus,
         source_location: SourceLocation,
         original_text: str,
-        extraction_reason: str
+        extraction_reason: str,
+        is_external: bool = False,
     ) -> list[TeacherOccupancy]:
         """Create occupancy records for each working slot.
 
@@ -311,6 +376,7 @@ class OccupancyExtractor:
             source_location: Source location
             original_text: Original cell text
             extraction_reason: Why occupancy extracted
+            is_external: True for industry/guest participants (Ind*, etc.)
 
         Returns:
             List of TeacherOccupancy records (one per working slot)
@@ -329,7 +395,8 @@ class OccupancyExtractor:
                 status=status,
                 source_location=source_location,
                 source_block_original_text=original_text,
-                extraction_reason=extraction_reason
+                extraction_reason=extraction_reason,
+                is_external=is_external,
             ))
 
         return occupancies

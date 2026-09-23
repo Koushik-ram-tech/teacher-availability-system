@@ -219,6 +219,9 @@ class ScheduleActivity:
     slot_range: ActivitySlotRange
     issues: list[ValidationIssue] = field(default_factory=list)
     resource_ref: "ResourceReference | None" = None  # NEW: normalized resource reference
+    resource_codes: list[str] = field(default_factory=list)  # Individual resource codes (authoritative)
+    group_index: int | None = None
+    source_cell_text: str | None = None
 
 
 # ---------------------------------------------------------------------------

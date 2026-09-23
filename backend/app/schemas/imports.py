@@ -48,7 +48,10 @@ class ScheduleImportRow(BaseModel):
     subject_or_activity: str | None = None
     section: str | None = None
     room: str | None = None
+    resource_codes: list[str] = []  # Individual resource codes (authoritative for persistence)
     notes: str | None = None
+    group_index: int | None = None
+    source_cell_text: str | None = None
     warnings: list[str] = []
 
 

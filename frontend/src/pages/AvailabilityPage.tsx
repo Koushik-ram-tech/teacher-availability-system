@@ -75,9 +75,32 @@ function AvailabilityGrid({
     }
   };
 
+  // Build human-readable aria-label for a status cell.
+  const cellAriaLabel = (day: string, slotCode: string, status: AvailabilityStatus | null): string => {
+    const dayLabel = DAY_LABELS[day] ?? day;
+    if (!status || (mode === 'teacher' && status === 'FREE')) {
+      return `${dayLabel} ${slotCode}: no scheduled activity`;
+    }
+    if (status === 'FREE') return `${dayLabel} ${slotCode}: free`;
+    if (status === 'OCCUPIED') return `${dayLabel} ${slotCode}: occupied`;
+    return `${dayLabel} ${slotCode}: unknown`;
+  };
+
   const renderStatusCell = (day: string, slotCode: string) => {
     const status = getSlotStatus(day, slotCode);
-    if (!status) return <td className="avail-cell avail-cell--unknown">—</td>;
+
+    // Teacher view: FREE slots render as a neutral dash — no "FREE" text.
+    // Resource view: FREE renders as normal status text.
+    if (!status || (mode === 'teacher' && status === 'FREE')) {
+      return (
+        <td
+          className="avail-cell avail-cell--free-teacher"
+          aria-label={cellAriaLabel(day, slotCode, status)}
+        >
+          <span className="avail-status-text" aria-hidden>—</span>
+        </td>
+      );
+    }
 
     const hasInfo = status === 'OCCUPIED' && getSlotInfo(day, slotCode);
     const cellClass = `avail-cell avail-cell--${status.toLowerCase()}${hasInfo ? ' avail-cell--clickable' : ''}`;
@@ -88,6 +111,7 @@ function AvailabilityGrid({
         onClick={hasInfo ? () => handleSlotClick(day, slotCode) : undefined}
         role={hasInfo ? 'button' : undefined}
         tabIndex={hasInfo ? 0 : undefined}
+        aria-label={cellAriaLabel(day, slotCode, status)}
         onKeyDown={
           hasInfo
             ? (e) => {
@@ -202,14 +226,24 @@ function AvailabilityGrid({
       )}
 
       <div className="avail-legend">
-        <span className="avail-legend-item">
-          <span className="avail-legend-box avail-legend-box--free" />
-          FREE
-        </span>
+        {/* Teacher mode: FREE slots are intentionally not shown — they appear as a neutral dash.
+            Resource mode: FREE is a meaningful status that must remain visible. */}
+        {mode === 'resource' && (
+          <span className="avail-legend-item">
+            <span className="avail-legend-box avail-legend-box--free" />
+            FREE
+          </span>
+        )}
         <span className="avail-legend-item">
           <span className="avail-legend-box avail-legend-box--occupied" />
           OCCUPIED
         </span>
+        {mode === 'teacher' && (
+          <span className="avail-legend-item">
+            <span className="avail-legend-box avail-legend-box--free-teacher" />
+            No activity
+          </span>
+        )}
         <span className="avail-legend-item">
           <span className="avail-legend-box avail-legend-box--unknown" />
           UNKNOWN

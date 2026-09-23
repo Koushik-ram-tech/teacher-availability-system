@@ -78,7 +78,7 @@ function SlotAvailabilityRow({ period, hasConfirmed }: { period: DayPeriod; hasC
         </div>
       ) : (
         <div className="avail-status avail-status--free">
-          <span className="avail-free-badge">FREE</span>
+          <span className="avail-free-badge avail-free-badge--neutral" aria-label="No scheduled activity">—</span>
         </div>
       )}
     </div>
@@ -342,7 +342,7 @@ function WeeklyMatrix({
 
                 return (
                   <td key={day} className={`wm-cell wm-cell--free ${isActive ? 'wm-cell--day-active' : ''}`}>
-                    <span className="wm-free">FREE</span>
+                    <span className="wm-free wm-free--neutral" aria-label="No scheduled activity">—</span>
                   </td>
                 );
               })}
