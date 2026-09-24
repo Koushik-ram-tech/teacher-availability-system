@@ -64,7 +64,7 @@ class ResourceAvailabilityOut(BaseModel):
 @router.get("/teachers/{teacher_id}", response_model=TeacherAvailabilityOut)
 def get_teacher_availability(
     teacher_id: UUID,
-    academic_year: str = Query(..., description="Academic year (e.g., '2026-Odd')"),
+    academic_year: str = Query(..., description="Academic year (e.g., '2026-2027')"),
     day: Optional[str] = Query(None, description="Optional ISO day name (e.g., 'monday')"),
     db: Session = Depends(get_db)
 ):
@@ -139,7 +139,7 @@ def get_teacher_availability(
 @router.get("/resources/{resource_id}", response_model=ResourceAvailabilityOut)
 def get_resource_availability(
     resource_id: UUID,
-    academic_year: str = Query(..., description="Academic year (e.g., '2026-Odd')"),
+    academic_year: str = Query(..., description="Academic year (e.g., '2026-2027')"),
     day: Optional[str] = Query(None, description="Optional ISO day name (e.g., 'monday')"),
     db: Session = Depends(get_db)
 ):
@@ -214,7 +214,7 @@ def get_resource_availability(
 @router.get("/resources/by-code/{code}", response_model=ResourceAvailabilityOut)
 def get_resource_availability_by_code(
     code: str,
-    academic_year: str = Query(..., description="Academic year (e.g., '2026-Odd')"),
+    academic_year: str = Query(..., description="Academic year (e.g., '2026-2027')"),
     day: Optional[str] = Query(None, description="Optional ISO day name (e.g., 'monday')"),
     db: Session = Depends(get_db)
 ):

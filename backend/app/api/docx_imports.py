@@ -69,7 +69,7 @@ MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MB
 )
 async def upload_docx(
     file: Annotated[UploadFile, File(description="DOCX timetable document")],
-    academic_year: Annotated[str, Form(description="Academic year e.g. 2026-Odd")],
+    academic_year: Annotated[str, Form(description="Academic year e.g. 2026-2027")],
     department: Annotated[str, Form(description="Department name e.g. Computer Applications")],
     db: Session = Depends(get_db),
 ) -> DOCXImportPreview:
@@ -202,15 +202,25 @@ def resolve_blocks(
             entry_type=resolution.entry_type,
             is_multi_slot=len(block_data.slots) > 1,
             is_manually_resolved=True,
+            source_cell_text=block_data.original_text,
+            group_index=0,
         )
 
         preview.resolved_activities.append(resolved)
         new_activities.append(resolved)
         applied_count += 1
 
+    # Remove resolved blocks from unresolved_blocks
+    resolved_block_ids = {res.block_id for res in resolution_input.resolutions}
+    preview.unresolved_blocks = [
+        b for b in preview.unresolved_blocks
+        if b.block_id not in resolved_block_ids
+    ]
+
     # Update counts
     preview.resolved_count = len(preview.resolved_activities)
     preview.manually_resolved_count += applied_count
+    preview.unresolved_count = len(preview.unresolved_blocks)
 
     # Update staging
     staging.update_docx_preview(import_id, preview)
@@ -331,7 +341,7 @@ def _convert_parser_to_api_preview(
         groups = getattr(block, 'activity_groups', [])
 
         if len(groups) > 1:
-            for group in groups:
+            for i, group in enumerate(groups):
                 grp_activity = (
                     ", ".join(ac.code for ac in group.activity_candidates)
                     or combined_activity
@@ -370,6 +380,8 @@ def _convert_parser_to_api_preview(
                             source_location=source_loc_str, entry_type=grp_entry_type,
                             is_multi_slot=len(block.slots) > 1, is_manually_resolved=False,
                             notes=grp_notes,
+                            source_cell_text=block.original_text,
+                            group_index=i,
                         ))
                 elif grp_external:
                     resolved_activities.append(ResolvedActivity(
@@ -380,6 +392,8 @@ def _convert_parser_to_api_preview(
                         source_location=source_loc_str,
                         entry_type=grp_entry_type, is_multi_slot=len(block.slots) > 1,
                         is_manually_resolved=False, notes=grp_notes,
+                        source_cell_text=block.original_text,
+                        group_index=i,
                     ))
                 else:
                     resolved_activities.append(ResolvedActivity(
@@ -390,6 +404,8 @@ def _convert_parser_to_api_preview(
                         source_location=source_loc_str,
                         entry_type=grp_entry_type, is_multi_slot=len(block.slots) > 1,
                         is_manually_resolved=False,
+                        source_cell_text=block.original_text,
+                        group_index=i,
                     ))
         else:
             # Single-group (most common): existing flat path
@@ -408,6 +424,8 @@ def _convert_parser_to_api_preview(
                         is_multi_slot=len(block.slots) > 1,
                         is_manually_resolved=False,
                         notes=external_notes,
+                        source_cell_text=block.original_text,
+                        group_index=0,
                     )
                     resolved_activities.append(resolved)
             elif external_participants:
@@ -426,6 +444,8 @@ def _convert_parser_to_api_preview(
                     is_multi_slot=len(block.slots) > 1,
                     is_manually_resolved=False,
                     notes=external_notes,
+                    source_cell_text=block.original_text,
+                    group_index=0,
                 )
                 resolved_activities.append(resolved)
             else:
@@ -443,6 +463,8 @@ def _convert_parser_to_api_preview(
                     entry_type=entry_type,
                     is_multi_slot=len(block.slots) > 1,
                     is_manually_resolved=False,
+                    source_cell_text=block.original_text,
+                    group_index=0,
                 )
                 resolved_activities.append(resolved)
 
@@ -518,6 +540,7 @@ def _convert_parser_to_api_preview(
             section=block.section,
             slots=block.slots,
             source_location=source_loc_str,
+            original_text=block.original_text,
             activity_candidates=activity_candidates,
             teacher_candidates=teacher_candidates,
             resource_candidates=resource_candidates,

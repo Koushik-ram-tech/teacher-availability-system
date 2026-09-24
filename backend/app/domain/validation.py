@@ -310,8 +310,8 @@ def _validate_teacher_activity_references(canonical: CanonicalTimetable) -> None
     for activity in canonical.activities:
         teachers_with_activities.add(activity.teacher_acronym)
         
-        # Check if teacher exists
-        if activity.teacher_acronym not in teacher_acronyms:
+        # Check if teacher exists (skip empty teacher acronyms for external/student-managed activities)
+        if activity.teacher_acronym and activity.teacher_acronym not in teacher_acronyms:
             activity.issues.append(
                 ValidationIssue(
                     severity=ValidationSeverity.ERROR,
@@ -418,8 +418,13 @@ def _validate_activity_duration(activity: ScheduleActivity) -> None:
     """Validate activity duration rules."""
     slot_count = len(activity.slot_range.slot_codes)
     
-    # 3+ slots invalid
-    if slot_count > 2:
+    # 3+ slots invalid, UNLESS it's a student-managed activity (like Placement)
+    from app.services.docx_import.participation_policy import is_student_managed
+    is_student = False
+    if activity.subject_or_activity:
+        is_student = is_student_managed(activity.subject_or_activity)
+        
+    if slot_count > 2 and not is_student:
         activity.issues.append(
             ValidationIssue(
                 severity=ValidationSeverity.ERROR,
@@ -518,6 +523,9 @@ def _validate_overlaps(canonical: CanonicalTimetable) -> None:
     
     for activity in canonical.activities:
         teacher = activity.teacher_acronym
+        if not teacher:
+            continue
+            
         day = activity.slot_range.day_of_week
         
         for slot in activity.slot_range.slot_codes:
@@ -529,44 +537,67 @@ def _validate_overlaps(canonical: CanonicalTimetable) -> None:
     
     for (teacher, day, slot), activities in occupancy.items():
         if len(activities) > 1:
-            # Multiple activities occupy the same slot
-            key = (teacher, day, slot)
-            if key not in reported_overlaps:
-                reported_overlaps.add(key)
-                
-                # Get day name
-                from app.core.schedule_config import ISO_TO_DAY_NAME
-                day_name = ISO_TO_DAY_NAME.get(day, f"day-{day}")
-                
-                # Create overlap issue for each activity
-                activity_descriptions = []
-                for act in activities:
-                    desc = f"{act.entry_type}"
-                    if act.subject_or_activity:
-                        desc += f": {act.subject_or_activity}"
-                    if act.section:
-                        desc += f" ({act.section})"
-                    activity_descriptions.append(desc)
-                
-                for activity in activities:
-                    activity.issues.append(
-                        ValidationIssue(
-                            severity=ValidationSeverity.ERROR,
-                            code="TEACHER_OVERLAP",
-                            message=(
-                                f"Teacher '{teacher}' has overlapping activities on "
-                                f"{day_name} at slot {slot}: {'; '.join(activity_descriptions)}"
-                            ),
-                            source_locations=[activity.slot_range.source_location] if activity.slot_range.source_location else [],
-                            affected_entities={
-                                "teacher": teacher,
-                                "day": day_name,
-                                "slot": slot,
-                                "activity_count": str(len(activities)),
-                            },
-                            suggestion="Remove or reschedule one of the conflicting activities",
-                        )
+            # Group by vMerge provenance to distinguish real conflicts from intentional same-day vMerge
+            provenance_groups = []
+            for act in activities:
+                # Two activities share provenance if they have the same source_cell_text and group_index
+                # and identical content.
+                found_group = False
+                for group in provenance_groups:
+                    rep = group[0]
+                    is_vmerge = (
+                        act.source_cell_text and rep.source_cell_text and 
+                        act.source_cell_text == rep.source_cell_text and 
+                        act.group_index == rep.group_index and
+                        act.subject_or_activity == rep.subject_or_activity and
+                        act.entry_type == rep.entry_type
                     )
+                    if is_vmerge:
+                        group.append(act)
+                        found_group = True
+                        break
+                if not found_group:
+                    provenance_groups.append([act])
+            
+            if len(provenance_groups) > 1:
+                # Multiple distinct provenances occupy the same slot -> REAL CONFLICT
+                key = (teacher, day, slot)
+                if key not in reported_overlaps:
+                    reported_overlaps.add(key)
+                    
+                    # Get day name
+                    from app.core.schedule_config import ISO_TO_DAY_NAME
+                    day_name = ISO_TO_DAY_NAME.get(day, f"day-{day}")
+                    
+                    # Create overlap issue for each activity
+                    activity_descriptions = []
+                    for act in activities:
+                        desc = f"{act.entry_type}"
+                        if act.subject_or_activity:
+                            desc += f": {act.subject_or_activity}"
+                        if act.section:
+                            desc += f" ({act.section})"
+                        activity_descriptions.append(desc)
+                    
+                    for activity in activities:
+                        activity.issues.append(
+                            ValidationIssue(
+                                severity=ValidationSeverity.ERROR,
+                                code="TEACHER_OVERLAP",
+                                message=(
+                                    f"Teacher '{teacher}' has overlapping activities on "
+                                    f"{day_name} at slot {slot}: {'; '.join(activity_descriptions)}"
+                                ),
+                                source_locations=[activity.slot_range.source_location] if activity.slot_range.source_location else [],
+                                affected_entities={
+                                    "teacher": teacher,
+                                    "day": day_name,
+                                    "slot": slot,
+                                    "activity_count": str(len(activities)),
+                                },
+                                suggestion="Remove or reschedule one of the conflicting activities",
+                            )
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +627,7 @@ def _validate_duplicates(canonical: CanonicalTimetable) -> None:
             tuple(sorted(activity.slot_range.slot_codes)),  # Sort to handle order variations
             activity.entry_type,
             (activity.subject_or_activity or "").strip().lower(),
+            (activity.section or "").strip().lower(),
         )
         
         if signature in seen:

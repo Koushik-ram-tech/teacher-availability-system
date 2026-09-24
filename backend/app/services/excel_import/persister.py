@@ -190,6 +190,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                         subject_or_activity=ir.subject_or_activity,
                         section=ir.section,
                         notes=ir.notes,
+                        group_index=ir.group_index,
                         source_cell_text=ir.source_cell_text,
                     )
                     db.add(allocation)
@@ -248,7 +249,9 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                             academic_year=preview.academic_year,
                             resource_ids=resource_ids_for_check,
                             day_of_week=day_iso,
-                            time_slot_ids=slot_ids_for_check
+                            time_slot_ids=slot_ids_for_check,
+                            source_cell_text=ir.source_cell_text,
+                            group_index=ir.group_index,
                         )
                         if has_conflict:
                             raise PersistenceError(

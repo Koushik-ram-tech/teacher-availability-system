@@ -559,7 +559,7 @@ class TestUploadFinalWorkbook:
 
     def test_upload_final_format_returns_200(self, client, program, time_slots) -> None:
         data = _build_final_workbook(
-            teacher_rows=[_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_teacher(program="MCA")],
             schedule_rows=[_schedule()],
         )
         resp = client.post(
@@ -574,7 +574,7 @@ class TestUploadFinalWorkbook:
     def test_upload_with_semester_scope_no_error(self, client, program, time_slots) -> None:
         data = _build_final_workbook(
             teacher_rows=[
-                _teacher(program="Master of Computer Applications",
+                _teacher(program="MCA",
                          semester_scope="I & III Semester"),
             ],
             schedule_rows=[_schedule()],
@@ -591,7 +591,7 @@ class TestUploadFinalWorkbook:
 
     def test_upload_lab_time_range_accepted(self, client, program, time_slots) -> None:
         data = _build_final_workbook(
-            teacher_rows=[_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_teacher(program="MCA")],
             schedule_rows=[_schedule(type_="LAB", time_="2:00 PM - 3:50 PM")],
         )
         resp = client.post(
@@ -603,7 +603,7 @@ class TestUploadFinalWorkbook:
 
     def test_upload_invalid_time_returns_200_with_errors(self, client, program) -> None:
         data = _build_final_workbook(
-            teacher_rows=[_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_teacher(program="MCA")],
             schedule_rows=[_schedule(time_="9:00 AM - 10:00 AM")],
         )
         resp = client.post(
@@ -617,7 +617,7 @@ class TestUploadFinalWorkbook:
     def test_confirm_staging_removed_after_confirm(self, client, program, time_slots) -> None:
         """After confirm (or attempted confirm), import_id must be handled."""
         data = _build_final_workbook(
-            teacher_rows=[_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_teacher(program="MCA")],
             schedule_rows=[_schedule()],
         )
         up = client.post(
@@ -667,7 +667,7 @@ class TestUploadFinalWorkbook:
                 acronym="TT",
                 name="Test Teacher",
                 level="PG",
-                program="Master of Computer Applications",
+                program="MCA",
                 department="Test Dept",
             )],
             schedule_rows=[_schedule()],

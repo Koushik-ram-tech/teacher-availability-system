@@ -83,6 +83,7 @@ class UnresolvedBlock(BaseModel):
 
     # Source location
     source_location: str
+    original_text: str | None = None
     table_row: int | None = None
     table_col: int | None = None
 
@@ -137,6 +138,8 @@ class ResolvedActivity(BaseModel):
     resource_codes: list[str] = []  # Individual resource codes for persistence (authoritative)
     source_location: str
     entry_type: str = "CLASS"  # CLASS, LAB, OTHER
+    source_cell_text: str | None = None
+    group_index: int | None = None
 
     # Metadata
     is_multi_slot: bool = False
@@ -235,6 +238,8 @@ class ManualResolutionInput(BaseModel):
 
     # Optional metadata
     entry_type: str = "CLASS"  # CLASS, LAB, OTHER
+    source_cell_text: str | None = None
+    group_index: int | None = None
     notes: str | None = None
 
 

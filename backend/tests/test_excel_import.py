@@ -124,7 +124,7 @@ def _simple_teacher(acronym: str = "TT", **overrides) -> dict:
         "name": "Test Teacher",
         "acronym": acronym,
         "level": "PG",
-        "program": "Master of Computer Applications",
+        "program": "MCA",
         "semester": 1,
         "department": "Test Dept",
     }
@@ -653,7 +653,7 @@ class TestUploadEndpoint:
     def test_upload_valid_workbook(self, client: TestClient, program: dict, time_slots: list) -> None:
         data = _build_workbook(
             teacher_rows=[
-                _simple_teacher(program="Master of Computer Applications"),
+                _simple_teacher(program="MCA"),
             ],
             schedule_rows=[_simple_schedule()],
         )
@@ -687,7 +687,7 @@ class TestUploadEndpoint:
     def test_upload_workbook_with_errors_returns_errors(self, client: TestClient, program: dict) -> None:
         # Invalid academic year supplied via form field
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
         )
         resp = client.post(
             "/api/v1/imports/excel",
@@ -702,7 +702,7 @@ class TestUploadEndpoint:
         """Uploading alone must not create any timetable rows in the DB."""
         from sqlalchemy import text as sq_text
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
             schedule_rows=[_simple_schedule()],
         )
         client.post(
@@ -738,7 +738,7 @@ class TestConfirmEndpoint:
     def test_confirm_creates_teacher_and_draft(self, client: TestClient, db, program: dict, time_slots: list) -> None:
         from sqlalchemy import text as sq_text
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
             schedule_rows=[_simple_schedule()],
         )
         up = client.post(
@@ -767,7 +767,7 @@ class TestConfirmEndpoint:
     def test_confirm_never_creates_confirmed(self, client: TestClient, db, program: dict, time_slots: list) -> None:
         from sqlalchemy import text as sq_text
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
             schedule_rows=[_simple_schedule()],
         )
         up = client.post(
@@ -789,7 +789,7 @@ class TestConfirmEndpoint:
 
     def test_get_import_returns_preview(self, client: TestClient, program: dict) -> None:
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
         )
         up = client.post(
             "/api/v1/imports/excel",
@@ -803,7 +803,7 @@ class TestConfirmEndpoint:
 
     def test_delete_import(self, client: TestClient, program: dict) -> None:
         data = _build_workbook(
-            teacher_rows=[_simple_teacher(program="Master of Computer Applications")],
+            teacher_rows=[_simple_teacher(program="MCA")],
         )
         up = client.post(
             "/api/v1/imports/excel",

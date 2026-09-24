@@ -544,7 +544,11 @@ function UploadPhase({
     const trimmedDept = department.trim();
 
     if (!trimmedYear) {
-      setError('Academic year is required (e.g. 2026-Odd).');
+      setError('Academic year is required (e.g. 2026-2027).');
+      return;
+    }
+    if (!/^\d{4}-\d{4}$/.test(trimmedYear)) {
+      setError('Academic year must be in YYYY-YYYY format (e.g. 2026-2027).');
       return;
     }
     if (!trimmedDept) {
@@ -588,12 +592,12 @@ function UploadPhase({
             setAcademicYear(e.target.value);
             setError(null);
           }}
-          placeholder="e.g. 2026-Odd"
+          placeholder="e.g. 2026-2027"
           disabled={loading}
           aria-describedby="import-year-hint"
         />
         <span id="import-year-hint" className="import-year-hint">
-          Format: YYYY-Odd or YYYY-Even (e.g. 2026-Odd)
+          Format: YYYY-YYYY (e.g. 2026-2027)
         </span>
       </div>
 
@@ -746,6 +750,8 @@ function PreviewPhase({
         resolved_activities: [...preview.resolved_activities, ...result.new_resolved_activities],
         resolved_count: preview.resolved_count + result.applied_count,
         manually_resolved_count: preview.manually_resolved_count + result.applied_count,
+        unresolved_count: result.remaining_unresolved,
+        unresolved_blocks: preview.unresolved_blocks.filter(b => b.block_id !== resolvingBlock.block_id)
       };
       onRefresh(updatedPreview);
       setResolvingBlock(null);

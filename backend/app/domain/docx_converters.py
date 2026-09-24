@@ -80,6 +80,8 @@ def docx_preview_to_canonical(preview: DOCXImportPreview) -> CanonicalTimetable:
             resource_codes=list(resolved.resource_codes),  # Individual codes (authoritative)
             notes=resolved.notes,  # Carries "External: Ind*" when applicable
             slot_range=slot_range,
+            source_cell_text=getattr(resolved, "source_cell_text", None),
+            group_index=getattr(resolved, "group_index", None),
         )
         activities.append(activity)
 
@@ -87,15 +89,15 @@ def docx_preview_to_canonical(preview: DOCXImportPreview) -> CanonicalTimetable:
     teachers: list[TeacherIdentity] = []
     faculty_legend_map = {entry.acronym: entry.full_name for entry in preview.faculty_legend}
 
-    # Infer semester from academic_year (e.g., "2026-Odd" → semester 1)
+    # Infer semester from academic_year (e.g., "2026-2027" → semester 1)
     semester = 1
     if "even" in preview.academic_year.lower():
         semester = 2
 
     # For DOCX, program_name must match database.
     # ValidationEngine will look up the program by name.
-    # The department "Computer Applications" maps to program "Master of Computer Applications"
-    program_name = "Master of Computer Applications" if "computer" in preview.department.lower() else preview.department
+    # The department "Computer Applications" maps to program "MCA"
+    program_name = "MCA" if "computer" in preview.department.lower() else preview.department
 
     for acronym in sorted(teacher_acronyms):
         # Skip empty acronyms (resource-only / external-only blocks)

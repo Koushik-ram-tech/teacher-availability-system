@@ -57,7 +57,7 @@ def seeded_db(db):
     # Seed program matching what TeacherImportRow uses
     db.add(Program(
         id=uuid.uuid4(),
-        name="Master of Computer Applications",
+        name="MCA",
         level="PG",
         is_active=True,
     ))
@@ -84,7 +84,7 @@ def _preview(teacher_acronym: str, day: str, slot_ids: list[str],
         name="Test Teacher",
         acronym=teacher_acronym,
         level="PG",
-        program_name="Master of Computer Applications",
+        program_name="MCA",
         semester=1,
         department="Computer Applications",
     )

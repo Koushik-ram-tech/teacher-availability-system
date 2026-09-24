@@ -265,7 +265,7 @@ def test_manual_resolution_single_block(client, db, mca_docx_path):
 
     assert resolve_data["applied_count"] == 1
     assert len(resolve_data["new_resolved_activities"]) == 1
-    assert resolve_data["remaining_unresolved"] == upload_data["unresolved_count"]
+    assert resolve_data["remaining_unresolved"] == upload_data["unresolved_count"] - 1
 
 
 # ---------------------------------------------------------------------------
@@ -548,3 +548,79 @@ def test_confirm_nonexistent_import_returns_404(client, db):
     response = client.post("/api/v1/imports/nonexistent-id/confirm")
 
     assert response.status_code == 404
+
+# ---------------------------------------------------------------------------
+# Test: Student-managed Placement resolution
+# ---------------------------------------------------------------------------
+
+def test_resolve_student_managed_placement_removes_from_unresolved(client, db):
+    """Test that resolving a student-managed block removes it from unresolved review and keeps teacher null."""
+    # 1. Start a mock upload that creates an unresolved block for Placement
+    from app.api import staging
+    from app.schemas.docx_imports import DOCXImportPreview, UnresolvedBlock, ResolvedActivity
+    
+    import_id = "test-placement-import"
+    mock_block = UnresolvedBlock(
+        block_id="block_placement_1",
+        day="Thursday",
+        section="I-A",
+        slots=["S6", "S7", "S8"],
+        source_location="Thursday, I-A",
+        resolution_required=True,
+        is_student_managed=True,
+        ambiguous_text="Placement",
+        ambiguity_reason="Resource ambiguity: CA1 or CA2",
+        candidate_activities=[{"code": "Placement", "name": "Placement", "match_score": 100}],
+        candidate_teachers=[],
+        candidate_resources=[{"code": "CA1", "name": "CA1", "match_score": 100}, {"code": "CA2", "name": "CA2", "match_score": 100}],
+    )
+    
+    preview = DOCXImportPreview(
+        import_id=import_id,
+        filename="test.docx",
+        academic_year="2026-Odd",
+        department="Computer Applications",
+        parser_status="PARTIAL",
+        total_activities_found=1,
+        total_blocks=1,
+        resolved_count=0,
+        unresolved_count=1,
+        manually_resolved_count=0,
+        resolved_activities=[],
+        unresolved_blocks=[mock_block],
+        imported_at="2026-09-01T00:00:00Z",
+    )
+    staging.update_docx_preview(import_id, preview)
+    
+    # 2. Call resolve API
+    response = client.post(
+        f"/api/v1/imports/{import_id}/resolve",
+        json={
+            "resolutions": [
+                {
+                    "block_id": "block_placement_1",
+                    "selected_activity": "Placement",
+                    "selected_teacher": None,
+                    "selected_resource": "CA1",
+                    "entry_type": "CLASS"
+                }
+            ]
+        }
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["applied_count"] == 1
+    assert data["remaining_unresolved"] == 0
+    assert len(data["new_resolved_activities"]) == 1
+    
+    new_activity = data["new_resolved_activities"][0]
+    assert new_activity["subject_or_activity"] == "Placement"
+    assert new_activity["teacher_acronym"] == ""  # Should be empty string as per our logic
+    assert new_activity["resource_code"] == "CA1"
+    
+    # 3. Verify it was actually removed from staging preview
+    updated_preview = staging.get_docx_preview(import_id)
+    assert len(updated_preview.unresolved_blocks) == 0
+    assert updated_preview.unresolved_count == 0
+    assert len(updated_preview.resolved_activities) == 1

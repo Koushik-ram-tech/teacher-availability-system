@@ -133,7 +133,7 @@ def infer_semester_from_academic_year(academic_year: str) -> int:
     """Infer semester number from academic year string.
 
     Args:
-        academic_year: e.g., "2026-Odd", "2026-Even"
+        academic_year: e.g., "2026-2027", "2026-Even"
 
     Returns:
         Semester number (1 for Odd, 2 for Even, default 1)

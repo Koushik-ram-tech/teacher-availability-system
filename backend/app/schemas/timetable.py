@@ -174,19 +174,7 @@ class TimetableWriteIn(BaseModel):
             raise ValueError(f"Unknown day names: {sorted(unknown)}.  Valid names: {sorted(VALID_DAY_NAMES)}")
         return value
 
-    @model_validator(mode="after")
-    def no_duplicate_slots_per_day(self) -> "TimetableWriteIn":
-        """Reject a payload where two entries on the same day claim the same slot code."""
-        for day_name, entries in self.days.items():
-            seen: set[str] = set()
-            for entry in entries:
-                overlap = seen & set(entry.slot_ids)
-                if overlap:
-                    raise ValueError(
-                        f"Day '{day_name}': slot(s) {sorted(overlap)} are claimed by more than one entry."
-                    )
-                seen.update(entry.slot_ids)
-        return self
+
 
 
 # ---------------------------------------------------------------------------

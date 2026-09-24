@@ -133,6 +133,7 @@ _SQLITE_DDL_STATEMENTS = [
         subject_or_activity TEXT NOT NULL,
         section TEXT,
         notes TEXT,
+        group_index INTEGER,
         source_cell_text TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -227,10 +228,10 @@ def program(db: Session) -> dict:
     prog_id = str(uuid.uuid4())
     db.execute(
         text("INSERT INTO programs (id, name, level, is_active) VALUES (:id, :name, :level, 1)"),
-        {"id": prog_id, "name": "Master of Computer Applications", "level": "PG"},
+        {"id": prog_id, "name": "MCA", "level": "PG"},
     )
     db.flush()
-    return {"id": prog_id, "name": "Master of Computer Applications", "level": "PG"}
+    return {"id": prog_id, "name": "MCA", "level": "PG"}
 
 
 @pytest.fixture()

@@ -106,7 +106,7 @@ class AvailabilityService:
         Args:
             db: Database session
             teacher_id: Teacher UUID
-            academic_year: Academic year (e.g., "2026-Odd")
+            academic_year: Academic year (e.g., "2026-2027")
             day: Optional ISO day name (e.g., "monday")
 
         Returns:
@@ -425,7 +425,9 @@ def check_resource_conflicts(
     resource_ids: list[UUID],
     day_of_week: int,
     time_slot_ids: list[UUID],
-    ignore_timetable_id: Optional[UUID] = None
+    ignore_timetable_id: Optional[UUID] = None,
+    source_cell_text: Optional[str] = None,
+    group_index: Optional[int] = None,
 ) -> tuple[bool, Optional[str]]:
     """Check if any of the given resources are already occupied at the given slots.
 
@@ -442,6 +444,8 @@ def check_resource_conflicts(
     """
     if not resource_ids or not time_slot_ids:
         return False, None
+
+    from sqlalchemy import not_, and_
 
     # Check faculty-backed confirmed entries
     query_se = (
@@ -460,6 +464,16 @@ def check_resource_conflicts(
     )
     if ignore_timetable_id:
         query_se = query_se.where(Timetable.id != ignore_timetable_id)
+
+    if source_cell_text is not None and group_index is not None:
+        query_se = query_se.where(
+            not_(
+                and_(
+                    ScheduleEntry.source_cell_text == source_cell_text,
+                    ScheduleEntry.group_index == group_index,
+                )
+            )
+        )
 
     conflict_se = db.execute(query_se).first()
     if conflict_se:
@@ -480,6 +494,16 @@ def check_resource_conflicts(
             ResourceAllocationSlot.time_slot_id.in_(time_slot_ids)
         )
     )
+
+    if source_cell_text is not None and group_index is not None:
+        query_ra = query_ra.where(
+            not_(
+                and_(
+                    ResourceAllocation.source_cell_text == source_cell_text,
+                    ResourceAllocation.group_index == group_index,
+                )
+            )
+        )
     conflict_ra = db.execute(query_ra).first()
     if conflict_ra:
         r_id, s_code = conflict_ra

@@ -614,6 +614,8 @@ def confirm_timetable(
                 section=entry.section,
                 room=entry.room,
                 notes=entry.notes,
+                source_cell_text=entry.source_cell_text,
+                group_index=entry.group_index,
             )
         )
 
@@ -622,19 +624,28 @@ def confirm_timetable(
     from app.schemas.timetable import ScheduleEntryIn
     validation_errors: list[str] = []
     for day_name, raw_entries in days_payload.items():
-        seen_codes: set[str] = set()
+        seen_codes: dict[str, dict] = {}
         for raw in raw_entries:
             try:
                 ScheduleEntryIn(**raw)
             except Exception as exc:  # noqa: BLE001
                 validation_errors.append(f"Day {day_name}: {exc}")
                 continue
-            overlap = seen_codes & set(raw["slot_ids"])
-            if overlap:
-                validation_errors.append(
-                    f"Day {day_name}: slots {sorted(overlap)} claimed by more than one entry."
-                )
-            seen_codes.update(raw["slot_ids"])
+                
+            for slot in raw["slot_ids"]:
+                if slot in seen_codes:
+                    existing = seen_codes[slot]
+                    # Allow overlap if they are from the same vMerge block
+                    is_vmerge = (
+                        raw.get("source_cell_text") and existing.get("source_cell_text") and
+                        raw["source_cell_text"] == existing["source_cell_text"] and
+                        raw.get("group_index") == existing.get("group_index")
+                    )
+                    if not is_vmerge:
+                        validation_errors.append(
+                            f"Day {day_name}: slots ['{slot}'] claimed by more than one entry."
+                        )
+                seen_codes[slot] = raw
 
     if validation_errors:
         raise HTTPException(

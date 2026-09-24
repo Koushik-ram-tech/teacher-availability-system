@@ -191,6 +191,7 @@ class ResourceAllocation(Base):
     subject_or_activity: Mapped[str] = mapped_column(String, nullable=False)
     section: Mapped[Optional[str]] = mapped_column(String)
     notes: Mapped[Optional[str]] = mapped_column(String)
+    group_index: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     source_cell_text: Mapped[Optional[str]] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

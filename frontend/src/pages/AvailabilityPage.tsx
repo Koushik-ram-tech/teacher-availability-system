@@ -518,7 +518,7 @@ export function AvailabilityPage() {
               onChange={(e) => setAcademicYear(e.target.value)}
             >
               <option value="2026-2027">2026-2027</option>
-              <option value="2026-Odd">2026-Odd</option>
+              <option value="2026-2027">2026-Odd</option>
               <option value="2026-Even">2026-Even</option>
               <option value="2025-2026">2025-2026</option>
               <option value="2025-Odd">2025-Odd</option>

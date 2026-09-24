@@ -151,7 +151,7 @@ export async function deleteImport(importId: string): Promise<void> {
  * Returns a DOCXImportPreview with resolved/unresolved blocks.
  *
  * @param file          The .docx file selected by the user.
- * @param academicYear  Academic year string (e.g. "2026-Odd")
+ * @param academicYear  Academic year string (e.g. "2026-2027")
  * @param department    Department name (e.g. "Computer Applications")
  */
 export async function uploadDOCX(
