@@ -76,7 +76,7 @@ async def upload_excel(
     # --- File type guard ---
     filename: str = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only .xlsx files are accepted.",
         )
@@ -84,13 +84,13 @@ async def upload_excel(
     data: bytes = await file.read()
 
     if len(data) == 0:
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
         )
     if len(data) > MAX_UPLOAD_BYTES:
         mb = MAX_UPLOAD_BYTES // (1024 * 1024)
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File too large. Maximum size is {mb} MB.",
         )
@@ -99,7 +99,7 @@ async def upload_excel(
     try:
         raw = parse_workbook(data, academic_year.strip())
     except ParseError as exc:
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
@@ -134,7 +134,7 @@ def get_import(import_id: str) -> ImportPreview:
     """Return the staged import preview identified by *import_id*."""
     canonical = staging.get_canonical(import_id)
     if canonical is None:
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
                 f"Import '{import_id}' not found. "
@@ -158,7 +158,7 @@ def get_import(import_id: str) -> ImportPreview:
 def delete_import(import_id: str) -> None:
     """Discard a staged import without persisting it."""
     if not staging.has_import(import_id):
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Import '{import_id}' not found.",
         )
@@ -201,7 +201,7 @@ def confirm_import(
                 block for block in docx_preview.unresolved_blocks
                 if block.resolution_required
             ]
-            import traceback; traceback.print_exc(); raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "message": f"{len(unresolved_required)} required unresolved blocks remain. Apply manual resolution or finalize blocks before confirming.",
@@ -224,7 +224,7 @@ def confirm_import(
         try:
             canonical = docx_preview_to_canonical(docx_preview)
         except ValueError as exc:
-            import traceback; traceback.print_exc(); raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Canonical conversion failed: {str(exc)}",
             ) from exc
@@ -232,7 +232,7 @@ def confirm_import(
         # XLSX workflow: canonical already staged
         canonical = staging.get_canonical(import_id)
         if canonical is None:
-            import traceback; traceback.print_exc(); raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
                     f"Import '{import_id}' not found. "
@@ -247,7 +247,7 @@ def confirm_import(
     if canonical.has_errors():
         # Convert to preview for error response
         preview = canonical_to_import_preview(canonical)
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "message": "Validation errors prevent confirmation.",
@@ -326,13 +326,13 @@ def confirm_import(
         db.commit()
     except PersistenceError as exc:
         db.rollback()
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
-        import traceback; traceback.print_exc(); raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
                 "An unexpected error occurred during import persistence. "
