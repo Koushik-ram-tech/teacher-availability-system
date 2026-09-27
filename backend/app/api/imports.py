@@ -20,8 +20,10 @@ HTTP status codes follow existing project conventions:
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -74,7 +76,7 @@ async def upload_excel(
     # --- File type guard ---
     filename: str = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only .xlsx files are accepted.",
         )
@@ -82,13 +84,13 @@ async def upload_excel(
     data: bytes = await file.read()
 
     if len(data) == 0:
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
         )
     if len(data) > MAX_UPLOAD_BYTES:
         mb = MAX_UPLOAD_BYTES // (1024 * 1024)
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File too large. Maximum size is {mb} MB.",
         )
@@ -97,7 +99,7 @@ async def upload_excel(
     try:
         raw = parse_workbook(data, academic_year.strip())
     except ParseError as exc:
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
@@ -132,7 +134,7 @@ def get_import(import_id: str) -> ImportPreview:
     """Return the staged import preview identified by *import_id*."""
     canonical = staging.get_canonical(import_id)
     if canonical is None:
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
                 f"Import '{import_id}' not found. "
@@ -156,7 +158,7 @@ def get_import(import_id: str) -> ImportPreview:
 def delete_import(import_id: str) -> None:
     """Discard a staged import without persisting it."""
     if not staging.has_import(import_id):
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Import '{import_id}' not found.",
         )
@@ -199,7 +201,7 @@ def confirm_import(
                 block for block in docx_preview.unresolved_blocks
                 if block.resolution_required
             ]
-            raise HTTPException(
+            import traceback; traceback.print_exc(); raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "message": f"{len(unresolved_required)} required unresolved blocks remain. Apply manual resolution or finalize blocks before confirming.",
@@ -222,7 +224,7 @@ def confirm_import(
         try:
             canonical = docx_preview_to_canonical(docx_preview)
         except ValueError as exc:
-            raise HTTPException(
+            import traceback; traceback.print_exc(); raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Canonical conversion failed: {str(exc)}",
             ) from exc
@@ -230,7 +232,7 @@ def confirm_import(
         # XLSX workflow: canonical already staged
         canonical = staging.get_canonical(import_id)
         if canonical is None:
-            raise HTTPException(
+            import traceback; traceback.print_exc(); raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
                     f"Import '{import_id}' not found. "
@@ -245,7 +247,7 @@ def confirm_import(
     if canonical.has_errors():
         # Convert to preview for error response
         preview = canonical_to_import_preview(canonical)
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "message": "Validation errors prevent confirmation.",
@@ -259,16 +261,78 @@ def confirm_import(
     # Persist (all flushes; caller session commits at the end)
     try:
         result = persist_import(preview, db)
+        db.flush()
+        from app.models.models import ResourceAllocation, ScheduleEntry, Timetable
+        from app.services.availability import check_resource_conflicts
+
+        allocations = db.scalars(
+            select(ResourceAllocation).where(
+                ResourceAllocation.source_import_id == import_id,
+                ResourceAllocation.status == "DRAFT",
+            )
+        ).all()
+        timetable_ids = [
+            *(UUID(timetable_id) for timetable_id in result["timetables_created"]),
+            *(UUID(timetable_id) for timetable_id in result["timetables_replaced"]),
+        ] if docx_preview is not None else []
+        imported_timetables = db.scalars(
+            select(Timetable).where(Timetable.id.in_(timetable_ids))
+        ).all() if timetable_ids else []
+
+        def validate_resource_use(
+            academic_year: str,
+            day_of_week: int,
+            resource_ids: list[UUID],
+            time_slot_ids: list[UUID],
+        ) -> None:
+            if not resource_ids or not time_slot_ids:
+                return
+            has_conflict, error_message = check_resource_conflicts(
+                db=db,
+                academic_year=academic_year,
+                resource_ids=resource_ids,
+                day_of_week=day_of_week,
+                time_slot_ids=time_slot_ids,
+            )
+            if has_conflict:
+                raise PersistenceError(error_message or "Resource allocation conflict.")
+
+        if docx_preview is not None:
+            for timetable in imported_timetables:
+                for entry in timetable.entries:
+                    validate_resource_use(
+                        academic_year=timetable.academic_year,
+                        day_of_week=entry.day_of_week,
+                        resource_ids=[link.resource_id for link in entry.resource_links],
+                        time_slot_ids=[link.time_slot_id for link in entry.slot_links],
+                    )
+
+        for allocation in allocations:
+            validate_resource_use(
+                academic_year=allocation.academic_year,
+                day_of_week=allocation.day_of_week,
+                resource_ids=[link.resource_id for link in allocation.resource_links],
+                time_slot_ids=[link.time_slot_id for link in allocation.slot_links],
+            )
+
+        if docx_preview is not None:
+            for timetable in imported_timetables:
+                timetable.status = "CONFIRMED"
+
+        for allocation in allocations:
+            allocation.status = "CONFIRMED"
+
+        db.flush()
         db.commit()
     except PersistenceError as exc:
         db.rollback()
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
-        raise HTTPException(
+        import traceback; traceback.print_exc(); raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
                 "An unexpected error occurred during import persistence. "

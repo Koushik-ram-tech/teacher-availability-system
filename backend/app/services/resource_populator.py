@@ -128,6 +128,18 @@ def find_or_create_resource(
     if existing:
         return existing
 
+    existing_alias = db.execute(
+        select(Resource)
+        .join(ResourceAlias, ResourceAlias.resource_id == Resource.id)
+        .where(
+            ResourceAlias.normalized_alias == normalized,
+            scope_filter,
+            Resource.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if existing_alias:
+        return existing_alias
+
     # Create new resource with explicit UUID for SQLite compatibility
     from uuid import uuid4
     resource = Resource(

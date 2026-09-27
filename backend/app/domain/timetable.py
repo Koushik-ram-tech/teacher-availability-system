@@ -159,6 +159,7 @@ class TeacherIdentity:
     semester: int
     department: str
     resolved_teacher_id: uuid.UUID | None = None
+    is_external: bool = False
     
     # Action determined during validation
     action: Literal["CREATE", "REUSE", "CONFLICT"] = "CREATE"
@@ -222,6 +223,7 @@ class ScheduleActivity:
     resource_codes: list[str] = field(default_factory=list)  # Individual resource codes (authoritative)
     group_index: int | None = None
     source_cell_text: str | None = None
+    is_external: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ import axios from 'axios';
 
 import { DaySchedulePeriods } from '../components/DaySchedulePeriods';
 import { Shell } from '../components/Shell';
+import { AcademicYearSelect } from '../components/AcademicYearSelect';
+import { formatSlotCodesRange, formatTimeRange } from '../time';
 import { confirmTimetable, createTimetable, getTeacher, getTimetableDay, updateTimetable } from '../services/api';
 import {
   ACADEMIC_YEAR_REGEX,
@@ -23,6 +25,7 @@ import {
   type EntryType,
   type ScheduleEntryPayload,
   type TimetableConfirmResponse,
+  type TimetableStatus,
   type TimetableWritePayload,
 } from '../types';
 
@@ -68,6 +71,7 @@ export function TeacherTimetablePage() {
   const [weekEntries, setWeekEntries] = useState<WeekEntries>({});
   const [weekTemplates, setWeekTemplates] = useState<WeekTemplates>({});
   const [loadedAcademicYear, setLoadedAcademicYear] = useState<string | null>(null);
+  const [loadedTimetableStatus, setLoadedTimetableStatus] = useState<TimetableStatus | null>(null);
   const [loadState, setLoadState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -91,6 +95,7 @@ export function TeacherTimetablePage() {
       setWeekEntries({});
       setWeekTemplates({});
       setLoadedAcademicYear(null);
+      setLoadedTimetableStatus(null);
       return;
     }
     const currentTeacherId = teacherId;
@@ -107,9 +112,11 @@ export function TeacherTimetablePage() {
       setWeekEntries({});
       setWeekTemplates({});
       setLoadedAcademicYear(null);
+      setLoadedTimetableStatus(null);
 
       const entries: WeekEntries = {};
       const templates: WeekTemplates = {};
+      let loadedStatus: TimetableStatus = 'DRAFT';
 
       try {
         await Promise.all(
@@ -120,12 +127,21 @@ export function TeacherTimetablePage() {
               templates[day] = response.periods.map((period) => ({ ...period, entry: null }));
             } catch (error) {
               if (isNotFound(error)) {
-                // Only a 404 means "no DRAFT for this teacher/year/day
-                // yet" -- a CONFIRMED timetable existing for the same
-                // year does not satisfy this request. Start this day
-                // from an empty, fixed grid instead of failing the page.
-                entries[day] = [];
-                templates[day] = FALLBACK_PERIODS;
+                try {
+                  const confirmed = await getTimetableDay(
+                    currentTeacherId,
+                    day,
+                    currentAcademicYear,
+                    'CONFIRMED',
+                  );
+                  loadedStatus = 'CONFIRMED';
+                  entries[day] = periodsToEntryPayloads(confirmed.periods);
+                  templates[day] = confirmed.periods.map((period) => ({ ...period, entry: null }));
+                } catch (confirmedError) {
+                  if (!isNotFound(confirmedError)) throw confirmedError;
+                  entries[day] = [];
+                  templates[day] = FALLBACK_PERIODS;
+                }
                 return;
               }
               // Any other failure is a real error, not "no timetable yet"
@@ -140,6 +156,7 @@ export function TeacherTimetablePage() {
           setWeekEntries(entries);
           setWeekTemplates(templates);
           setLoadedAcademicYear(currentAcademicYear);
+          setLoadedTimetableStatus(loadedStatus);
           setLoadState('loaded');
         }
       } catch (error) {
@@ -338,22 +355,24 @@ export function TeacherTimetablePage() {
           <div>
             <p className="eyebrow">Day 1 · Timetable editor</p>
             <h1>{teacherQuery.data ? `${teacherQuery.data.name} (${teacherQuery.data.acronym})` : 'Timetable'}</h1>
-            <p className="subtitle">Build the weekly draft schedule. Saving does not confirm the timetable yet.</p>
+            <p className="subtitle">
+              {loadedTimetableStatus === 'CONFIRMED'
+                ? 'Viewing the confirmed timetable.'
+                : 'Build the weekly draft schedule. Saving does not confirm the timetable yet.'}
+            </p>
           </div>
-          <span className="status-pill">DRAFT</span>
+          <span className="status-pill">{loadedTimetableStatus ?? 'DRAFT'}</span>
         </div>
 
         {teacherQuery.isError && <p className="error-text">Could not load this teacher. Check the teacher ID.</p>}
 
         <label className="academic-year-field">
           Academic year
-          <input
+          <AcademicYearSelect
+            id="teacher-academic-year"
             required
             value={academicYear}
-            onChange={(event) => setAcademicYear(event.target.value)}
-            placeholder="e.g. 2025-2026"
-            pattern="\d{4}-\d{4}"
-            title="Format: YYYY-YYYY (e.g. 2025-2026)"
+            onChange={setAcademicYear}
           />
           {academicYear.trim() && !isValidAcademicYear(academicYear) && (
             <span className="field-hint field-hint--error">Format must be YYYY-YYYY, e.g. 2025-2026</span>
@@ -385,6 +404,10 @@ export function TeacherTimetablePage() {
           <>
             <DaySchedulePeriods periods={previewPeriods} />
 
+            {loadedTimetableStatus === 'CONFIRMED' ? (
+              <p className="success-box">This timetable was confirmed as part of the import and is read-only here.</p>
+            ) : (
+              <>
             <div className="entry-list-block">
               <h2>Entries for {DAY_LABELS[selectedDay]}</h2>
               {entriesForDay.length === 0 && <p className="muted">No entries yet for this day.</p>}
@@ -395,7 +418,9 @@ export function TeacherTimetablePage() {
                       {entry.entry_type}
                     </span>
                     <span>{entryLabel({ entry_type: entry.entry_type, subject_or_activity: entry.subject_or_activity })}</span>
-                    <span className="muted">{entry.slot_ids.join(', ')}</span>
+                    <span className="muted">
+                      {entry.slot_ids.join(', ')} · {formatSlotCodesRange(entry.slot_ids)}
+                    </span>
                     <button type="button" className="link-button" onClick={() => handleRemoveEntry(index)}>
                       Remove
                     </button>
@@ -447,14 +472,24 @@ export function TeacherTimetablePage() {
                 <span>Slots (select every slot this entry occupies)</span>
                 <div className="slot-picker-grid">
                   {availableSlotCodes.map((code) => (
-                    <label key={code} className="slot-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={form.slot_ids.includes(code)}
-                        onChange={() => toggleSlotCode(code)}
-                      />
-                      {code}
-                    </label>
+                    (() => {
+                      const period = template.find((candidate) => candidate.kind === 'SLOT' && candidate.code === code);
+                      return (
+                        <label key={code} className="slot-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={form.slot_ids.includes(code)}
+                            onChange={() => toggleSlotCode(code)}
+                          />
+                          <span>{code}</span>
+                          {period && (
+                            <span className="slot-checkbox__time">
+                              {formatTimeRange(period.start_time, period.end_time)}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })()
                   ))}
                 </div>
               </div>
@@ -537,6 +572,8 @@ export function TeacherTimetablePage() {
                   </p>
                 </div>
               </div>
+            )}
+              </>
             )}
           </>
         )}

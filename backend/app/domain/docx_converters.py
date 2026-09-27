@@ -82,6 +82,7 @@ def docx_preview_to_canonical(preview: DOCXImportPreview) -> CanonicalTimetable:
             slot_range=slot_range,
             source_cell_text=getattr(resolved, "source_cell_text", None),
             group_index=getattr(resolved, "group_index", None),
+            is_external=getattr(resolved, "is_external", False),
         )
         activities.append(activity)
 

@@ -198,6 +198,7 @@ def resolve_blocks(
             teacher_acronym=resolution.selected_teacher or "",
             subject_or_activity=resolution.selected_activity,
             resource_code=resolution.selected_resource,
+            resource_codes=[resolution.selected_resource] if resolution.selected_resource else [],
             source_location=block_data.source_location,
             entry_type=resolution.entry_type,
             is_multi_slot=len(block_data.slots) > 1,
@@ -317,9 +318,9 @@ def _convert_parser_to_api_preview(
         combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
         combined_resource_codes = [rc.code for rc in block.resource_candidates]
 
-        # Produce one resolved entry per FACULTY/NAME_ONLY teacher.
-        # EXTERNAL participants (Ind*, industry persons) are not faculty teachers —
-        # they are preserved in the notes field and do NOT create Teacher DB rows.
+        # Produce one resolved entry per FACULTY/NAME_ONLY teacher AND per EXTERNAL participant.
+        # EXTERNAL participants (Ind*, industry persons) are passed as Teacher identities with is_external=True
+        # so they display in the UI but bypass DB Teacher creation.
         faculty_teachers = [
             t for t in block.teacher_candidates
             if getattr(t, "role", "FACULTY") in ("FACULTY",) or getattr(t, "is_name_only", False)
@@ -369,11 +370,13 @@ def _convert_parser_to_api_preview(
                     "External: " + ", ".join(t.raw_token or t.acronym for t in grp_external)
                     if grp_external else None
                 )
-                if grp_faculty:
-                    for teacher in grp_faculty:
+                all_grp_teachers = grp_faculty + grp_external
+                if all_grp_teachers:
+                    for teacher in all_grp_teachers:
+                        is_ext = getattr(teacher, "role", "FACULTY") == "EXTERNAL"
                         resolved_activities.append(ResolvedActivity(
                             day=block.day, section=block.section, slots=block.slots,
-                            teacher_acronym=teacher.normalized_acronym,
+                            teacher_acronym=teacher.normalized_acronym if not is_ext else getattr(teacher, "raw_token", teacher.acronym),
                             subject_or_activity=grp_activity,
                             resource_code=grp_resource_text,
                             resource_codes=grp_resource_codes,
@@ -382,19 +385,8 @@ def _convert_parser_to_api_preview(
                             notes=grp_notes,
                             source_cell_text=block.original_text,
                             group_index=i,
+                            is_external=is_ext,
                         ))
-                elif grp_external:
-                    resolved_activities.append(ResolvedActivity(
-                        day=block.day, section=block.section, slots=block.slots,
-                        teacher_acronym="", subject_or_activity=grp_activity,
-                        resource_code=grp_resource_text,
-                        resource_codes=grp_resource_codes,
-                        source_location=source_loc_str,
-                        entry_type=grp_entry_type, is_multi_slot=len(block.slots) > 1,
-                        is_manually_resolved=False, notes=grp_notes,
-                        source_cell_text=block.original_text,
-                        group_index=i,
-                    ))
                 else:
                     resolved_activities.append(ResolvedActivity(
                         day=block.day, section=block.section, slots=block.slots,

@@ -144,6 +144,7 @@ class ResolvedActivity(BaseModel):
     # Metadata
     is_multi_slot: bool = False
     is_manually_resolved: bool = False
+    is_external: bool = False
 
     # Optional notes — used to carry external participant info (e.g. "External: Ind*")
     # without creating a Teacher DB row. Also used for group-level annotations.

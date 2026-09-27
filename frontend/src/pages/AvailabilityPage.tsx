@@ -3,8 +3,12 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { Shell } from '../components/Shell';
+import { AcademicYearSelect } from '../components/AcademicYearSelect';
 import { searchTeachers, getTeacherAvailability, getResourceAvailabilityByCode } from '../services/api';
+import { getCurrentAcademicYear } from '../academicYears';
+import { formatTimeRange } from '../time';
 import type { Teacher, TeacherAvailability, ResourceAvailability, AvailabilityStatus } from '../types';
+import { FALLBACK_PERIODS } from '../types';
 
 const DEBOUNCE_MS = 300;
 
@@ -20,19 +24,12 @@ const DAY_LABELS: Record<string, string> = {
 };
 
 // Slot structure with time information
-const SLOTS = [
-  { code: 'S1', time: '08:00–08:55', isBreak: false },
-  { code: 'S2', time: '08:55–09:50', isBreak: false },
-  { code: 'S3', time: '09:50–10:45', isBreak: false },
-  { code: 'BREAK', label: 'Break', time: '10:45–11:15', isBreak: true },
-  { code: 'S4', time: '11:15–12:10', isBreak: false },
-  { code: 'S5', time: '12:10–13:05', isBreak: false },
-  { code: 'LUNCH', label: 'Lunch', time: '13:05–14:00', isBreak: true },
-  { code: 'S6', time: '14:00–14:55', isBreak: false },
-  { code: 'S7', time: '14:55–15:50', isBreak: false },
-  { code: 'S8', time: '15:50–16:45', isBreak: false },
-  { code: 'S9', time: '16:45–17:40', isBreak: false },
-] as const;
+const SLOTS = FALLBACK_PERIODS.map((period) => ({
+  code: period.kind === 'BREAK' ? (period.label === 'Lunch' ? 'LUNCH' : 'BREAK') : period.code!,
+  label: period.label,
+  time: formatTimeRange(period.start_time, period.end_time),
+  isBreak: period.kind === 'BREAK',
+}));
 
 type SearchMode = 'teacher' | 'resource';
 
@@ -439,7 +436,7 @@ function ResourceSearchPanel({
 
 export function AvailabilityPage() {
   const [mode, setMode] = useState<SearchMode>('teacher');
-  const [academicYear, setAcademicYear] = useState('2026-2027');
+  const [academicYear, setAcademicYear] = useState(getCurrentAcademicYear());
   const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
   const [selectedResourceCode, setSelectedResourceCode] = useState<string | null>(null);
 
@@ -512,18 +509,11 @@ export function AvailabilityPage() {
 
           <div className="avail-year-selector">
             <label htmlFor="academic-year">Academic Year:</label>
-            <select
+            <AcademicYearSelect
               id="academic-year"
               value={academicYear}
-              onChange={(e) => setAcademicYear(e.target.value)}
-            >
-              <option value="2026-2027">2026-2027</option>
-              <option value="2026-2027">2026-Odd</option>
-              <option value="2026-Even">2026-Even</option>
-              <option value="2025-2026">2025-2026</option>
-              <option value="2025-Odd">2025-Odd</option>
-              <option value="2025-Even">2025-Even</option>
-            </select>
+              onChange={setAcademicYear}
+            />
           </div>
         </div>
 

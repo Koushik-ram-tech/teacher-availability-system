@@ -3,7 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 import { Shell } from '../components/Shell';
+import { AcademicYearSelect } from '../components/AcademicYearSelect';
 import { confirmImport, deleteImport, uploadExcel } from '../services/api';
+import { getCurrentAcademicYear } from '../academicYears';
+import { formatSlotCodesRange } from '../time';
 import type { ImportConfirmResult, ImportPreview, ScheduleImportRow, TeacherImportRow } from '../types';
 import { DAY_LABELS, ACADEMIC_YEAR_REGEX, isValidAcademicYear } from '../types';
 
@@ -178,8 +181,8 @@ function SchedulePreviewTable({ days }: { days: ImportPreview['days'] }) {
               <tr key={r.row_refs[0]}>
                 <td><code>{r.teacher_acronym}</code></td>
                 <td className="import-time-cell">
-                  {/* Show slot codes since there is no time_display field; backend resolved them from 'time' column */}
-                  {r.slot_ids.join(' + ')}
+                  {r.slot_ids.join(' + ')}<br />
+                  <span className="muted">{formatSlotCodesRange(r.slot_ids)}</span>
                 </td>
                 <td>
                   <span className={`entry-type entry-type--${r.entry_type.toLowerCase()}`}>
@@ -209,7 +212,7 @@ function UploadPhase({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [academicYear, setAcademicYear] = useState('');
+  const [academicYear, setAcademicYear] = useState(getCurrentAcademicYear());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -266,16 +269,12 @@ function UploadPhase({
         <label htmlFor="import-academic-year" className="import-year-label">
           Academic Year
         </label>
-        <input
+        <AcademicYearSelect
           id="import-academic-year"
-          type="text"
           className={`import-year-input ${yearTouched && !yearValid ? 'import-year-input--error' : ''}`}
           value={academicYear}
-          onChange={(e) => { setAcademicYear(e.target.value); setError(null); }}
-          placeholder="e.g. 2026-2027"
-          pattern="\d{4}-\d{4}"
+          onChange={(value) => { setAcademicYear(value); setError(null); }}
           disabled={loading}
-          aria-describedby="import-year-hint"
         />
         {yearTouched && !yearValid && (
           <span id="import-year-hint" className="import-year-hint import-year-hint--error">

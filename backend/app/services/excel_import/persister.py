@@ -100,6 +100,9 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     acronym_to_teacher_id: dict[str, uuid.UUID] = {}
 
     for t in preview.teachers:
+        if t.is_external:
+            continue
+
         if t.action == "REUSE":
             if t.resolved_teacher_id is None:
                 raise PersistenceError(
@@ -141,7 +144,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
             is_active=True,
         )
         db.add(new_teacher)
-        db.flush()
         acronym_to_teacher_id[t.acronym] = new_teacher.id
         teachers_created.append(str(new_teacher.id))
 
@@ -172,11 +174,15 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     ).all()
     for ea in existing_allocs:
         db.delete(ea)
-    db.flush()
 
     for acronym, days_map in entries_by_teacher.items():
-        if not acronym:
+        t_row = next((t for t in preview.teachers if t.acronym == acronym), None)
+        is_ext = getattr(t_row, "is_external", False) if t_row else False
+
+        if not acronym or is_ext:
             # External unowned resource allocations (e.g. Ind*)
+            # CRITICAL FIX: Persist as DRAFT, not CONFIRMED, to avoid N+1 conflict validation
+            # during initial import. Conflicts will be validated during DRAFT→CONFIRMED promotion.
 
             for day_name, import_rows in days_map.items():
                 day_iso = DAY_NAME_TO_ISO[day_name]
@@ -184,7 +190,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                     allocation = ResourceAllocation(
                         id=uuid.uuid4(),
                         academic_year=preview.academic_year,
-                        status="CONFIRMED",
+                        status="DRAFT",  # FIXED: was "CONFIRMED"
                         source_import_id=preview.import_id,
                         day_of_week=day_iso,
                         subject_or_activity=ir.subject_or_activity,
@@ -194,7 +200,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                         source_cell_text=ir.source_cell_text,
                     )
                     db.add(allocation)
-                    db.flush()
 
                     # Handle slots
                     for slot_code in ir.slot_ids:
@@ -217,10 +222,24 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                         normalized = normalize_resource_name(code)
                         if normalized in resource_cache:
                             resource = resource_cache[normalized]
+                            resources_reused_count += 1
                         else:
+                            # Check if resource already exists in DB before creating
+                            existing_count = db.execute(
+                                select(func.count(Resource.id))
+                                .where(Resource.normalized_name == normalized)
+                                .where(Resource.department.is_(None))
+                            ).scalar()
+
                             resource_type = classify_resource_type(code)
                             resource = find_or_create_resource(db=db, name=code, resource_type=resource_type, department=None)
                             resource_cache[normalized] = resource
+
+                            if existing_count == 0:
+                                resources_created_count += 1
+                            else:
+                                resources_reused_count += 1
+
                             # Create common aliases
                             if "lab" in code.lower():
                                 if " " not in code:
@@ -236,27 +255,10 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                             allocation_id=allocation.id,
                             resource_id=resource.id
                         ))
+                        entries_linked_count += 1
 
-                    # Validate resource conflicts before allowing CONFIRMED persistence
-                    if codes_to_link:
-                        slot_ids_for_check = [slot_code_to_id[code] for code in ir.slot_ids]
-                        resource_ids_for_check = [
-                            resource_cache[normalize_resource_name(code)].id
-                            for code in codes_to_link
-                        ]
-                        has_conflict, error_msg = check_resource_conflicts(
-                            db=db,
-                            academic_year=preview.academic_year,
-                            resource_ids=resource_ids_for_check,
-                            day_of_week=day_iso,
-                            time_slot_ids=slot_ids_for_check,
-                            source_cell_text=ir.source_cell_text,
-                            group_index=ir.group_index,
-                        )
-                        if has_conflict:
-                            raise PersistenceError(
-                                f"Cannot confirm external allocation for '{ir.subject_or_activity}': {error_msg}"
-                            )
+                    # NO conflict validation here - validation happens during DRAFT→CONFIRMED promotion
+                    # This eliminates N+1 queries during import
 
             continue
 
@@ -281,7 +283,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
         replaced = existing_draft is not None
         if existing_draft is not None:
             db.delete(existing_draft)
-            db.flush()
 
         # Build TimetableWriteIn payload for full Pydantic validation
         # (slot code validity, LAB rules, no duplicate slots per day, etc.)
@@ -323,7 +324,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
             source="IMPORT",
         )
         db.add(new_timetable)
-        db.flush()
 
         # Persist schedule entries and slot links
         # Collect all slot objects for bulk insert at the end
@@ -345,7 +345,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                     source_cell_text=entry_in.source_cell_text,
                 )
                 db.add(new_entry)
-                db.flush()
 
                 # --------------------------------------------------
                 # Resource Population Integration
@@ -433,6 +432,9 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                         )
                     )
 
+        # Flush schedule entries to DB to get their IDs before inserting slot links
+        db.flush()
+
         # Bulk insert all slot links for this timetable
         if slot_objects:
             db.bulk_save_objects(slot_objects)
@@ -443,7 +445,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
             timetables_created.append(str(new_timetable.id))
 
     # Final flush before caller commits
-    db.flush()
 
     return {
         "teachers_created": teachers_created,

@@ -4,6 +4,7 @@ import type {
   ImportConfirmResult,
   ImportPreview,
   Program,
+  ResourceCatalogItem,
   Teacher,
   TeacherCreatePayload,
   TimetableConfirmResponse,
@@ -125,8 +126,8 @@ export async function getImport(importId: string): Promise<ImportPreview> {
 }
 
 /**
- * Confirm a staged import — persists teachers + DRAFT timetables.
- * The server revalidates before writing; returns summary counts on success.
+ * Confirm a staged import. DOCX timetables and their resource allocations are
+ * confirmed atomically; Excel teacher timetables remain DRAFT.
  */
 export async function confirmImport(importId: string): Promise<ImportConfirmResult> {
   const response = await api.post<ImportConfirmResult>(`/imports/${importId}/confirm`, null, {
@@ -246,5 +247,17 @@ export async function getResourceAvailabilityByCode(
     `/availability/resources/by-code/${encodeURIComponent(code)}`,
     { params: { academic_year: academicYear } },
   );
+  return response.data;
+}
+
+export async function getResourceCatalog(
+  department: string,
+  academicYear: string,
+  day: string,
+  slots: string[],
+): Promise<ResourceCatalogItem[]> {
+  const response = await api.get<ResourceCatalogItem[]>('/availability/resources/catalog', {
+    params: { department, academic_year: academicYear, day, slots: slots.join(',') },
+  });
   return response.data;
 }

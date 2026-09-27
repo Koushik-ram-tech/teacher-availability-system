@@ -8,9 +8,21 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.models import (
+    Resource,
+    ResourceAllocation,
+    ResourceAllocationResource,
+    ResourceAllocationSlot,
+    ScheduleEntry,
+    ScheduleEntryResource,
+    ScheduleEntrySlot,
+    TimeSlot,
+    Timetable,
+)
 from app.services.availability import AvailabilityService
 
 
@@ -56,9 +68,98 @@ class ResourceAvailabilityOut(BaseModel):
     days: dict[str, DayAvailabilityOut]
 
 
+class ResourceCatalogItem(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    resource_type: str
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/resources/catalog", response_model=list[ResourceCatalogItem])
+def get_resource_catalog(
+    department: str = Query(..., min_length=1),
+    academic_year: str = Query(...),
+    day: str | None = Query(None),
+    slots: str = Query("", description="Comma-separated slot codes"),
+    db: Session = Depends(get_db),
+) -> list[ResourceCatalogItem]:
+    """List active shared/department resources, excluding slot conflicts."""
+    resources = db.scalars(
+        select(Resource)
+        .where(
+            Resource.is_active.is_(True),
+            or_(
+                Resource.department.is_(None),
+                func.lower(func.trim(Resource.department)) == department.strip().lower(),
+            ),
+        )
+        .order_by(Resource.name)
+    ).all()
+
+    slot_codes = [code.strip().upper() for code in slots.split(",") if code.strip()]
+    occupied_resource_ids: set[UUID] = set()
+    if day and slot_codes and resources:
+        day_to_iso = {
+            "monday": 1,
+            "tuesday": 2,
+            "wednesday": 3,
+            "thursday": 4,
+            "friday": 5,
+            "saturday": 6,
+        }
+        day_iso = day.strip().lower()
+        if day_iso not in day_to_iso:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid day. Must be Monday through Saturday.",
+            )
+
+        resource_ids = [resource.id for resource in resources]
+        faculty_conflicts = db.scalars(
+            select(ScheduleEntryResource.resource_id)
+            .join(ScheduleEntry, ScheduleEntry.id == ScheduleEntryResource.schedule_entry_id)
+            .join(Timetable, Timetable.id == ScheduleEntry.timetable_id)
+            .join(ScheduleEntrySlot, ScheduleEntrySlot.schedule_entry_id == ScheduleEntry.id)
+            .join(TimeSlot, TimeSlot.id == ScheduleEntrySlot.time_slot_id)
+            .where(
+                Timetable.academic_year == academic_year,
+                Timetable.status.in_(["DRAFT", "CONFIRMED"]),
+                ScheduleEntry.day_of_week == day_to_iso[day_iso],
+                ScheduleEntryResource.resource_id.in_(resource_ids),
+                TimeSlot.code.in_(slot_codes),
+            )
+        ).all()
+        allocation_conflicts = db.scalars(
+            select(ResourceAllocationResource.resource_id)
+            .join(ResourceAllocation, ResourceAllocation.id == ResourceAllocationResource.allocation_id)
+            .join(ResourceAllocationSlot, ResourceAllocationSlot.allocation_id == ResourceAllocation.id)
+            .join(TimeSlot, TimeSlot.id == ResourceAllocationSlot.time_slot_id)
+            .where(
+                ResourceAllocation.academic_year == academic_year,
+                ResourceAllocation.status.in_(["DRAFT", "CONFIRMED"]),
+                ResourceAllocation.day_of_week == day_to_iso[day_iso],
+                ResourceAllocationResource.resource_id.in_(resource_ids),
+                TimeSlot.code.in_(slot_codes),
+            )
+        ).all()
+        occupied_resource_ids.update(faculty_conflicts)
+        occupied_resource_ids.update(allocation_conflicts)
+
+    return [
+        ResourceCatalogItem(
+            id=resource.id,
+            code=resource.name,
+            name=resource.name,
+            resource_type=resource.resource_type,
+        )
+        for resource in resources
+        if resource.id not in occupied_resource_ids
+    ]
 
 
 @router.get("/teachers/{teacher_id}", response_model=TeacherAvailabilityOut)

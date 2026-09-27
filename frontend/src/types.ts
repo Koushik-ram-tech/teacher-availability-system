@@ -38,15 +38,12 @@ export interface TeacherCreatePayload {
 // a read must state which year it means rather than relying on any
 // "most recent" or "current" resolution.
 //
-// PROTOTYPE_ACADEMIC_YEAR is the configured default for the prototype
-// deployment. It is NOT derived from the current date and NOT used as a
-// server-side default — it is only used to pre-fill the UI field so that
-// teachers don't have to type it on every session.
+// The frontend defaults to the current academic year, while the API always
+// receives an explicit year on reads and writes.
 // ---------------------------------------------------------------------------
 
-/** Prototype default academic year shown in the UI. Change this here only;
- * the API/DB always store academic_year explicitly. */
-export const PROTOTYPE_ACADEMIC_YEAR = '2025-2026';
+/** Current academic year displayed by default; the API stores it explicitly. */
+export const PROTOTYPE_ACADEMIC_YEAR = `${new Date().getFullYear() - (new Date().getMonth() < 6 ? 1 : 0)}-${new Date().getFullYear() - (new Date().getMonth() < 6 ? 0 : -1)}`;
 
 export type EntryType = 'CLASS' | 'LAB' | 'OTHER';
 
@@ -153,19 +150,6 @@ export const FALLBACK_PERIODS: DayPeriod[] = [
 ];
 
 /** Format a HH:MM:SS backend time string as h:mm AM/PM for display. */
-function formatTime(hhmm: string): string {
-  const [h, m] = hhmm.split(':').map(Number);
-  const suffix = h < 12 ? 'AM' : 'PM';
-  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${hour12}:${String(m).padStart(2, '0')} ${suffix}`;
-}
-
-/** Formats a start–end time pair (HH:MM:SS) as "h:mm AM – h:mm PM" for display.
- * Does NOT change backend storage — times are still sent/received as HH:MM:SS. */
-export function formatTimeRange(start: string, end: string): string {
-  return `${formatTime(start)} – ${formatTime(end)}`;
-}
-
 // ---------------------------------------------------------------------------
 // Lab slot validation
 // A LAB must occupy exactly two consecutive working slots (no break between).
@@ -325,9 +309,9 @@ export interface ImportConfirmResult {
   teachers_created: string[];
   /** UUIDs of existing teachers that were reused (no change) */
   teachers_reused: string[];
-  /** UUIDs of newly created DRAFT timetables */
+  /** UUIDs of newly created timetables */
   timetables_created: string[];
-  /** UUIDs of DRAFT timetables that replaced a prior draft */
+  /** UUIDs of replacement timetables */
   timetables_replaced: string[];
 }
 
@@ -399,6 +383,7 @@ export interface DOCXResolvedActivity {
   teacher_acronym: string;
   subject_or_activity: string;
   resource_code?: string | null;
+  resource_codes: string[];
   source_location: string;
   entry_type: string;
   is_multi_slot: boolean;
@@ -493,4 +478,11 @@ export interface ResourceAvailability {
   resource_type: string;
   academic_year: string;
   days: Record<string, DayAvailability>;
+}
+
+export interface ResourceCatalogItem {
+  id: string;
+  code: string;
+  name: string;
+  resource_type: string;
 }

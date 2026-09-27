@@ -185,6 +185,7 @@ def canonical_to_import_preview(canonical: CanonicalTimetable) -> ImportPreview:
                 semester=t.semester,
                 department=t.department,
                 resolved_teacher_id=t.resolved_teacher_id,
+                is_external=getattr(t, "is_external", False),
                 warnings=warnings,
             )
         )

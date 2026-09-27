@@ -21,7 +21,7 @@ class TeacherImportRow(BaseModel):
     """One row from the Teachers sheet after parsing and DB resolution."""
 
     row_ref: str  # e.g. "Teachers!2"
-    action: Literal["CREATE", "REUSE", "CONFLICT"]
+    action: Literal["CREATE", "REUSE", "CONFLICT", "SKIP"]
     name: str
     acronym: str
     level: str
@@ -29,6 +29,7 @@ class TeacherImportRow(BaseModel):
     semester: int
     department: str
     resolved_teacher_id: UUID | None = None
+    is_external: bool = False
     warnings: list[str] = []
 
 

@@ -1,9 +1,15 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 
 import { Shell } from '../components/Shell';
-import { confirmImport, finalizeDOCXBlocks, resolveDOCXBlocks, uploadDOCX } from '../services/api';
+import { AcademicYearSelect } from '../components/AcademicYearSelect';
+import { ResourceResolutionSelect } from '../components/ResourceResolutionSelect';
+import { confirmImport, finalizeDOCXBlocks, getResourceCatalog, resolveDOCXBlocks, uploadDOCX } from '../services/api';
+import { getCurrentAcademicYear } from '../academicYears';
+import { getAvailableResourceCandidates } from '../resourceCandidates';
+import { formatSlotCodesRange } from '../time';
 import type {
   DOCXImportPreview,
   DOCXManualResolutionInput,
@@ -283,7 +289,7 @@ function ResolvedActivitiesTable({ activities }: { activities: DOCXResolvedActiv
             {rows.map((r, i) => (
               <tr key={i} className={r.is_manually_resolved ? 'import-row--manual' : ''}>
                 <td>{r.section}</td>
-                <td>{r.slots.join(', ')}</td>
+                <td>{r.slots.join(', ')}<br /><span className="muted">{formatSlotCodesRange(r.slots)}</span></td>
                 <td>{r.subject_or_activity}</td>
                 <td><code>{r.teacher_acronym}</code></td>
                 <td>{r.resource_code || <span className="muted">—</span>}</td>
@@ -517,7 +523,7 @@ function UploadPhase({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [academicYear, setAcademicYear] = useState('');
+  const [academicYear, setAcademicYear] = useState(getCurrentAcademicYear());
   const [department, setDepartment] = useState('Computer Applications');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -583,18 +589,15 @@ function UploadPhase({
         <label htmlFor="import-academic-year" className="import-year-label">
           Academic Year
         </label>
-        <input
+        <AcademicYearSelect
           id="import-academic-year"
-          type="text"
           className="import-year-input"
           value={academicYear}
-          onChange={(e) => {
-            setAcademicYear(e.target.value);
+          onChange={(value) => {
+            setAcademicYear(value);
             setError(null);
           }}
-          placeholder="e.g. 2026-2027"
           disabled={loading}
-          aria-describedby="import-year-hint"
         />
         <span id="import-year-hint" className="import-year-hint">
           Format: YYYY-YYYY (e.g. 2026-2027)
@@ -704,6 +707,29 @@ function PreviewPhase({
   const [finalizing, setFinalizing] = useState(false);
 
   const confirmable = canConfirm(preview);
+  const resourceCatalogQuery = useQuery({
+    queryKey: [
+      'resource-catalog',
+      preview.department,
+      preview.academic_year,
+      resolvingBlock?.day,
+      resolvingBlock?.slots.join(','),
+    ],
+    queryFn: () => getResourceCatalog(
+      preview.department,
+      preview.academic_year,
+      resolvingBlock!.day,
+      resolvingBlock!.slots,
+    ),
+    enabled: Boolean(resolvingBlock),
+  });
+  const resourceChoices = resolvingBlock
+    ? getAvailableResourceCandidates(
+      resourceCatalogQuery.data ?? [],
+      preview.resolved_activities,
+      resolvingBlock,
+    )
+    : [];
 
   // Status message based on parser status
   const getStatusMessage = () => {
@@ -727,6 +753,9 @@ function PreviewPhase({
     // For faculty-managed blocks, teacher is required.
     const teacherRequired = resolvingBlock && !resolvingBlock.is_student_managed;
     if (!resolvingBlock || !resolutionInputs.selected_activity) {
+      return;
+    }
+    if (resolvingBlock.resource_occupancy_status === 'AMBIGUOUS' && !resolutionInputs.selected_resource) {
       return;
     }
     if (teacherRequired && !resolutionInputs.selected_teacher) {
@@ -842,7 +871,10 @@ function PreviewPhase({
       {resolvingBlock && (
         <div className="modal-overlay" onClick={() => setResolvingBlock(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Resolve Block: {resolvingBlock.section} - {resolvingBlock.slots.join(', ')}</h3>
+            <h3>
+              Resolve Block: {resolvingBlock.section} - {resolvingBlock.slots.join(', ')}
+              <span className="muted"> · {formatSlotCodesRange(resolvingBlock.slots)}</span>
+            </h3>
 
             <div style={{ marginTop: '1rem' }}>
               <label>
@@ -897,23 +929,14 @@ function PreviewPhase({
                 )}
               </label>
 
-              {resolvingBlock.resource_candidates.length > 0 && (
-                <label style={{ marginTop: '1rem', display: 'block' }}>
-                  <strong>Resource {resolvingBlock.is_student_managed ? '(required — resolves ambiguity)' : '(optional)'}:</strong>
-                  <select
-                    value={resolutionInputs.selected_resource || ''}
-                    onChange={(e) => setResolutionInputs({ ...resolutionInputs, selected_resource: e.target.value })}
-                    style={{ display: 'block', width: '100%', marginTop: '0.5rem', padding: '0.5rem' }}
-                  >
-                    <option value="">-- Select resource --</option>
-                    {resolvingBlock.resource_candidates.map((r, i) => (
-                      <option key={i} value={r.code}>
-                        {r.code}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+              <ResourceResolutionSelect
+                resources={resourceChoices}
+                value={resolutionInputs.selected_resource || ''}
+                onChange={(value) => setResolutionInputs({ ...resolutionInputs, selected_resource: value })}
+                loading={resourceCatalogQuery.isLoading}
+                error={resourceCatalogQuery.error ? 'Could not load the resource catalog.' : null}
+                required={resolvingBlock.resource_occupancy_status === 'AMBIGUOUS'}
+              />
 
               <label style={{ marginTop: '1rem', display: 'block' }}>
                 <strong>Entry Type:</strong>
@@ -939,6 +962,7 @@ function PreviewPhase({
                 disabled={
                   !resolutionInputs.selected_activity ||
                   (!resolvingBlock.is_student_managed && !resolutionInputs.selected_teacher) ||
+                  (resolvingBlock.resource_occupancy_status === 'AMBIGUOUS' && !resolutionInputs.selected_resource) ||
                   resolving
                 }
               >
@@ -994,9 +1018,9 @@ function SuccessPhase({ result }: { result: ImportConfirmResult }) {
       <div className="import-success__icon" aria-hidden>
         ✅
       </div>
-      <h2 className="import-success__heading">DOCX Timetables Saved</h2>
+      <h2 className="import-success__heading">DOCX Timetable Confirmed</h2>
       <p className="import-success__sub">
-        The DOCX import completed successfully. Draft timetables are now stored and ready for review.
+        The imported faculty timetables and resource allocations are confirmed and live.
       </p>
 
       <div className="import-success-stats">
@@ -1012,7 +1036,7 @@ function SuccessPhase({ result }: { result: ImportConfirmResult }) {
         </div>
         <div className="import-stat-card">
           <span className="import-stat-num">{result.timetables_created.length + result.timetables_replaced.length}</span>
-          <span className="import-stat-label">Draft timetables</span>
+          <span className="import-stat-label">Confirmed timetables</span>
           {result.timetables_created.length > 0 && (
             <span className="import-stat-detail">{result.timetables_created.length} new</span>
           )}
@@ -1024,11 +1048,6 @@ function SuccessPhase({ result }: { result: ImportConfirmResult }) {
           <span className="import-stat-num">{result.academic_year}</span>
           <span className="import-stat-label">Academic year</span>
         </div>
-      </div>
-
-      <div className="import-success-note">
-        <strong>Note:</strong> Timetables are saved as <em>Draft</em>. The Director can search for individual teachers
-        to review their schedule.
       </div>
 
       <div className="import-success-actions">

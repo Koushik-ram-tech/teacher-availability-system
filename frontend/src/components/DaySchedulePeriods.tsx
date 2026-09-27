@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 
 import { groupPeriods } from '../groupPeriods';
-import { entryLabel, formatTimeRange, type DayPeriod } from '../types';
+import { entryLabel, type DayPeriod } from '../types';
+import { formatTimeRange } from '../time';
 
 interface DaySchedulePeriodsProps {
   periods: DayPeriod[];
@@ -55,16 +56,7 @@ export function DaySchedulePeriods({ periods, renderSlotActions }: DaySchedulePe
           );
         }
 
-        // ── CONTINUATION slot — subtle connector, no repeated label ────────
-        if (row.kind === 'continuation') {
-          return (
-            <li className="period-row period-row--continuation" key={row.period.code ?? index} aria-hidden="true">
-              <span className="period-time">{formatTimeRange(row.period.start_time, row.period.end_time)}</span>
-              <span className="period-label">{row.period.code}</span>
-              <span className="period-continuation-marker">↑ continued</span>
-            </li>
-          );
-        }
+        if (row.kind === 'continuation') return null;
 
         // ── PRIMARY row — full activity display ────────────────────────────
         const entry = row.period.entry!;

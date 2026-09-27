@@ -4,15 +4,17 @@ import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 
 import { Shell } from '../components/Shell';
+import { AcademicYearSelect } from '../components/AcademicYearSelect';
 import { getTeacher, getTimetableDay } from '../services/api';
 import { groupPeriods } from '../groupPeriods';
+import { formatSlotCodesRange, formatTimeRange } from '../time';
+import { formatTime } from '../time';
 import {
   DAY_LABELS,
   DAY_NAMES,
   FALLBACK_PERIODS,
   PROTOTYPE_ACADEMIC_YEAR,
   entryLabel,
-  formatTimeRange,
   type DayName,
   type DayPeriod,
 } from '../types';
@@ -131,28 +133,7 @@ function DailyGrid({
             );
           }
 
-          // CONTINUATION rows — subtle connector, never shows activity label again
-          if (row.kind === 'continuation') {
-            return (
-              <div
-                key={row.period.code ?? `cont-${i}`}
-                className={`avail-row ${
-                  !hasConfirmed ? 'avail-row--unknown' : 'avail-row--occupied avail-row--continuation'
-                }`}
-                aria-hidden="true"
-              >
-                <span className="avail-time">{formatTimeRange(row.period.start_time, row.period.end_time)}</span>
-                <span className="avail-code">{row.period.code}</span>
-                <div className="avail-status avail-status--occupied">
-                  {!hasConfirmed ? (
-                    <><span className="avail-unknown-badge">—</span><span className="avail-unknown-label">No confirmed data</span></>
-                  ) : (
-                    <span className="avail-continuation-marker">↑ continued</span>
-                  )}
-                </div>
-              </div>
-            );
-          }
+          if (row.kind === 'continuation') return null;
 
           // FREE rows — unchanged
           if (row.kind === 'free') {
@@ -208,22 +189,15 @@ function DailyGrid({
 
 // ---------------------------------------------------------------------------
 // Weekly timetable matrix  — S1-S9 vs Mon-Sat
-// Multi-slot entries: first slot shows the activity; subsequent slots show ↕
+// Multi-slot entries occupy one table cell spanning their slot rows.
 // ---------------------------------------------------------------------------
 
 const SLOT_CODES_ORDERED = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'];
 
-const SLOT_TIME_LABELS: Record<string, string> = {
-  S1: '8:00',
-  S2: '8:55',
-  S3: '9:50',
-  S4: '11:15',
-  S5: '12:10',
-  S6: '14:00',
-  S7: '14:55',
-  S8: '15:50',
-  S9: '16:45',
-};
+const SLOT_TIME_LABELS = Object.fromEntries(
+  FALLBACK_PERIODS.filter((period) => period.kind === 'SLOT' && period.code)
+    .map((period) => [period.code!, formatTime(period.start_time)]),
+);
 
 interface WeeklyData {
   day: DayName;
@@ -231,7 +205,7 @@ interface WeeklyData {
   hasConfirmed: boolean;  // false when this day had a 404 (no confirmed timetable)
 }
 
-function WeeklyMatrix({
+export function WeeklyMatrix({
   weekData,
   activeDay,
   onDayClick,
@@ -310,22 +284,22 @@ function WeeklyMatrix({
                   const dayRendered = renderedEntries.get(day)!;
 
                   if (dayRendered.has(entryId)) {
-                    // Continuation slot — show a subtle indicator, not the full label
-                    return (
-                      <td
-                        key={day}
-                        className={`wm-cell wm-cell--occupied wm-cell--continuation ${isActive ? 'wm-cell--day-active' : ''}`}
-                        aria-hidden="true"
-                        title={`${entryLabel(period.entry)} (continued)`}
-                      >
-                        <span className="wm-continuation">↕</span>
-                      </td>
-                    );
+                    return null;
                   }
 
                   dayRendered.add(entryId);
+                  const entryPeriods = period.entry.slot_codes
+                    .map((slotCode) => lookup.get(day)?.get(slotCode))
+                    .filter((entryPeriod): entryPeriod is DayPeriod => Boolean(entryPeriod));
+                  const displayRange = entryPeriods.length > 0
+                    ? formatTimeRange(entryPeriods[0].start_time, entryPeriods[entryPeriods.length - 1].end_time)
+                    : formatSlotCodesRange(period.entry.slot_codes);
                   return (
-                    <td key={day} className={`wm-cell wm-cell--occupied ${isActive ? 'wm-cell--day-active' : ''}`}>
+                    <td
+                      key={day}
+                      rowSpan={Math.max(period.entry.slot_codes.length, 1)}
+                      className={`wm-cell wm-cell--occupied ${isActive ? 'wm-cell--day-active' : ''}`}
+                    >
                       <span className={`wm-entry-type entry-type entry-type--${period.entry.entry_type.toLowerCase()}`}>
                         {period.entry.entry_type}
                       </span>
@@ -334,7 +308,7 @@ function WeeklyMatrix({
                         <span className="wm-section">{period.entry.section}</span>
                       )}
                       {period.entry.slot_codes.length > 1 && (
-                        <span className="wm-slot-span">{period.entry.slot_codes.join('–')}</span>
+                        <span className="wm-slot-span">{period.entry.slot_codes.join('–')} · {displayRange}</span>
                       )}
                     </td>
                   );
@@ -461,12 +435,11 @@ export function DirectorTeacherPage() {
         <div className="dir-controls-row">
           <label className="academic-year-field" style={{ marginBottom: 0 }}>
             Academic year
-            <input
+            <AcademicYearSelect
               id="director-academic-year"
               required
               value={academicYear}
-              onChange={(e) => setAcademicYear(e.target.value)}
-              placeholder="e.g. 2025-2026"
+              onChange={setAcademicYear}
             />
           </label>
 
