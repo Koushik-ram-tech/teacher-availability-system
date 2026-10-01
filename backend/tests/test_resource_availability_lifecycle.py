@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.api import staging
 from app.domain.converters import canonical_to_import_preview
@@ -22,6 +22,8 @@ from app.models.models import (
     Program,
     Resource,
     ResourceAllocation,
+    ResourceAllocationResource,
+    ResourceAllocationSlot,
     ScheduleEntry,
     ScheduleEntryResource,
     ScheduleEntrySlot,
@@ -29,7 +31,11 @@ from app.models.models import (
     TimeSlot,
     Timetable,
 )
-from app.services.availability import AvailabilityService
+from app.services.availability import (
+    AvailabilityService,
+    check_resource_conflicts,
+    check_resource_conflicts_batch,
+)
 from app.services.excel_import.persister import persist_import
 from app.services.resource_populator import find_or_create_resource
 
@@ -121,6 +127,7 @@ def _slot_id(db, code: str) -> uuid.UUID:
 
 
 def test_draft_external_allocation_is_not_visible(db, resource_db):
+    """External allocations stay DRAFT until explicitly confirmed via /confirm endpoint."""
     import_id = str(uuid.uuid4())
     preview = canonical_to_import_preview(
         _external_canonical(import_id, [("monday", ["S6", "S7"])])
@@ -129,11 +136,13 @@ def test_draft_external_allocation_is_not_visible(db, resource_db):
     persist_import(preview, db)
     db.commit()
 
+    # Allocations remain DRAFT after persist_import
     assert _allocation_statuses(db, import_id) == ["DRAFT"]
     availability = AvailabilityService.get_resource_availability(
         db, _resource(db).id, ACADEMIC_YEAR, "monday"
     )
     assert availability is not None
+    # DRAFT allocations are not visible in availability
     assert availability.days["monday"].slots["S6"].status == "FREE"
     assert availability.days["monday"].slots["S7"].status == "FREE"
 
@@ -161,6 +170,7 @@ def test_confirmation_exposes_fdc_monday_and_tuesday_occupancy(
 def test_confirmation_promotes_only_current_import_allocations(
     client: TestClient, db, resource_db
 ):
+    """Test that only the current import's allocations are promoted to CONFIRMED."""
     other_import_id = str(uuid.uuid4())
     persist_import(
         canonical_to_import_preview(
@@ -183,6 +193,7 @@ def test_confirmation_promotes_only_current_import_allocations(
 
     assert response.status_code == 200, response.text
     assert _allocation_statuses(db, import_id) == ["CONFIRMED"]
+    # Other import remains DRAFT (not affected by this confirmation)
     assert _allocation_statuses(db, other_import_id) == ["DRAFT"]
     current_allocation = db.scalar(
         select(ResourceAllocation).where(ResourceAllocation.source_import_id == import_id)
@@ -215,10 +226,45 @@ def test_failed_confirmation_rolls_back_external_allocation_promotion(
 def test_resource_conflict_blocks_external_allocation_confirmation(
     client: TestClient, db, resource_db
 ):
+    """Test that resource conflicts are detected when allocations have different identities.
+
+    Creates two allocations with DIFFERENT sections but same resource/slot.
+    These should conflict because they have different replacement identities.
+    """
+    # Create first allocation with section I-A
     existing_import_id = str(uuid.uuid4())
-    existing_preview = canonical_to_import_preview(
-        _external_canonical(existing_import_id, [("monday", ["S6"])])
+    existing_canonical = CanonicalTimetable(
+        import_id=existing_import_id,
+        academic_year=ACADEMIC_YEAR,
+        teachers=[
+            TeacherIdentity(
+                acronym="Ind*",
+                name="Industry Participant",
+                level="PG",
+                program_name="MCA",
+                semester=1,
+                department="External",
+                is_external=True,
+            )
+        ],
+        activities=[
+            ScheduleActivity(
+                teacher_acronym="Ind*",
+                entry_type="OTHER",
+                subject_or_activity="External session A",
+                section="I-A",  # Section I-A
+                room="FDC",
+                notes=None,
+                slot_range=ActivitySlotRange(
+                    day_of_week=1,  # Monday
+                    slot_codes=["S6"],
+                ),
+                resource_codes=["FDC"],
+                is_external=True,
+            )
+        ],
     )
+    existing_preview = canonical_to_import_preview(existing_canonical)
     persist_import(existing_preview, db)
     db.flush()
     existing = db.scalar(
@@ -231,13 +277,46 @@ def test_resource_conflict_blocks_external_allocation_confirmation(
     db.commit()
     assert _allocation_statuses(db, existing_import_id) == ["CONFIRMED"]
 
+    # Create second allocation with section I-B (different section, same resource/slot)
     import_id = str(uuid.uuid4())
-    _stage_external(import_id, [("monday", ["S6"])])
+    conflicting_canonical = CanonicalTimetable(
+        import_id=import_id,
+        academic_year=ACADEMIC_YEAR,
+        teachers=[
+            TeacherIdentity(
+                acronym="Ind*",
+                name="Industry Participant",
+                level="PG",
+                program_name="MCA",
+                semester=1,
+                department="External",
+                is_external=True,
+            )
+        ],
+        activities=[
+            ScheduleActivity(
+                teacher_acronym="Ind*",
+                entry_type="OTHER",
+                subject_or_activity="External session B",
+                section="I-B",  # Section I-B (different!)
+                room="FDC",
+                notes=None,
+                slot_range=ActivitySlotRange(
+                    day_of_week=1,  # Monday
+                    slot_codes=["S6"],
+                ),
+                resource_codes=["FDC"],
+                is_external=True,
+            )
+        ],
+    )
+    staging.stage_canonical(import_id, conflicting_canonical)
     response = client.post(f"/api/v1/imports/{import_id}/confirm")
 
+    # Should fail with 422 because FDC is already occupied at S6 on Monday by section I-A
     assert response.status_code == 422, response.text
     assert _allocation_statuses(db, import_id) == []
-    assert "external participant" in response.json()["detail"]
+    assert "external participant" in response.json()["detail"].lower()
 
 
 def test_teacher_availability_is_unchanged_by_external_confirmation(
@@ -485,6 +564,101 @@ def test_docx_confirmation_confirms_faculty_and_external_occupancy(
     assert db.scalar(select(Teacher).where(Teacher.acronym == "SU")) is not None
     assert db.scalar(select(Teacher).where(Teacher.acronym == "Ind*")) is None
     assert _allocation_statuses(db, import_id) == ["CONFIRMED"]
+
+
+def test_batched_resource_conflicts_match_existing_checks_with_constant_query_count(
+    db, resource_db
+):
+    faculty_resource = Resource(
+        id=uuid.uuid4(), name="Faculty Lab", normalized_name="faculty lab",
+        resource_type="LAB", department=None, is_active=True,
+    )
+    external_resource = Resource(
+        id=uuid.uuid4(), name="External Hall", normalized_name="external hall",
+        resource_type="OTHER", department=None, is_active=True,
+    )
+    draft_resource = Resource(
+        id=uuid.uuid4(), name="Draft Room", normalized_name="draft room",
+        resource_type="CLASSROOM", department=None, is_active=True,
+    )
+    teacher_id = uuid.uuid4()
+    timetable_id = uuid.uuid4()
+    entry_id = uuid.uuid4()
+    allocation_id = uuid.uuid4()
+    draft_allocation_id = uuid.uuid4()
+    db.add_all([
+        faculty_resource,
+        external_resource,
+        draft_resource,
+        Teacher(
+            id=teacher_id, name="Conflict Teacher", acronym="CT", level="PG",
+            program_id=resource_db.id, semester=1, department="Computer Applications",
+            is_active=True,
+        ),
+        Timetable(
+            id=timetable_id, teacher_id=teacher_id, academic_year=ACADEMIC_YEAR,
+            status="CONFIRMED", source="test",
+        ),
+        ScheduleEntry(
+            id=entry_id, timetable_id=timetable_id, day_of_week=1,
+            entry_type="CLASS", subject_or_activity="Faculty class", section="I-A",
+        ),
+        ResourceAllocation(
+            id=allocation_id, academic_year=ACADEMIC_YEAR, status="CONFIRMED",
+            source_import_id="confirmed-external", day_of_week=1,
+            subject_or_activity="External event",
+        ),
+        ResourceAllocation(
+            id=draft_allocation_id, academic_year=ACADEMIC_YEAR, status="DRAFT",
+            source_import_id="draft-external", day_of_week=1,
+            subject_or_activity="Draft event",
+        ),
+    ])
+    db.flush()
+    db.add_all([
+        ScheduleEntryResource(schedule_entry_id=entry_id, resource_id=faculty_resource.id),
+        ScheduleEntrySlot(schedule_entry_id=entry_id, time_slot_id=_slot_id(db, "S1")),
+        ResourceAllocationResource(allocation_id=allocation_id, resource_id=external_resource.id),
+        ResourceAllocationSlot(allocation_id=allocation_id, time_slot_id=_slot_id(db, "S2")),
+        ResourceAllocationResource(allocation_id=draft_allocation_id, resource_id=draft_resource.id),
+        ResourceAllocationSlot(allocation_id=draft_allocation_id, time_slot_id=_slot_id(db, "S3")),
+    ])
+    db.flush()
+
+    uses = [
+        (ACADEMIC_YEAR, 1, [faculty_resource.id], [_slot_id(db, "S1")]),
+        (ACADEMIC_YEAR, 1, [external_resource.id], [_slot_id(db, "S2")]),
+        (ACADEMIC_YEAR, 1, [draft_resource.id], [_slot_id(db, "S3")]),
+        (ACADEMIC_YEAR, 2, [faculty_resource.id], [_slot_id(db, "S1")]),
+        ("2026-2027", 1, [faculty_resource.id], [_slot_id(db, "S1")]),
+    ]
+
+    statement_count = 0
+
+    def count_statement(*_args, **_kwargs):
+        nonlocal statement_count
+        statement_count += 1
+
+    connection = db.connection()
+    event.listen(connection, "before_cursor_execute", count_statement)
+    try:
+        batched = check_resource_conflicts_batch(db, uses)
+    finally:
+        event.remove(connection, "before_cursor_execute", count_statement)
+
+    individual = [
+        check_resource_conflicts(
+            db,
+            academic_year=year,
+            resource_ids=resource_ids,
+            day_of_week=day,
+            time_slot_ids=slot_ids,
+        )
+        for year, day, resource_ids, slot_ids in uses
+    ]
+    assert batched == individual
+    assert [has_conflict for has_conflict, _ in batched] == [True, True, False, False, False]
+    assert statement_count == 2
 
 
 def test_real_mca_docx_single_confirmation_resource_acceptance(

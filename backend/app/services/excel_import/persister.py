@@ -9,6 +9,7 @@ Rules enforced here:
   - Deletes and replaces the DRAFT timetable if one already exists.
   - Runs full TimetableWriteIn Pydantic validation before any DB writes.
   - Automatically populates resources from room values and links schedule_entries.
+  - Implements safe resource allocation replacement for re-imports.
   - The caller (API layer) is responsible for commit/rollback; this module
     only flushes within the session so all writes are in one transaction.
 
@@ -27,6 +28,9 @@ from app.core.schedule_config import DAY_NAME_TO_ISO
 from app.models.models import (
     Program,
     Resource,
+    ResourceAllocation,
+    ResourceAllocationSlot,
+    ResourceAllocationResource,
     ScheduleEntry,
     ScheduleEntryResource,
     ScheduleEntrySlot,
@@ -166,14 +170,68 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     from app.services.availability import check_resource_conflicts
     import re
 
-    # Delete existing allocations from a previous run of this exact import session
-    existing_allocs = db.scalars(
+    # Build a set of (academic_year, day, section, group, slot codes) from current import
+    # This defines the "replacement identity" for superseding old allocations
+    current_allocation_keys = set()
+
+    for acronym, days_map in entries_by_teacher.items():
+        t_row = next((t for t in preview.teachers if t.acronym == acronym), None)
+        is_ext = getattr(t_row, "is_external", False) if t_row else False
+
+        if not acronym or is_ext:
+            # External allocations - track their replacement keys
+            for day_name, import_rows in days_map.items():
+                day_iso = DAY_NAME_TO_ISO[day_name]
+                for ir in import_rows:
+                    # Key: (academic_year, day, section, group_index, frozenset of slot_codes)
+                    slot_set = frozenset(ir.slot_ids)
+                    key = (preview.academic_year, day_iso, ir.section, ir.group_index, slot_set)
+                    current_allocation_keys.add(key)
+
+    # Delete superseded allocations: same (year, day, section, group, slots) from previous imports
+    # This implements safe replacement - only delete allocations that match the current import's blocks
+    if current_allocation_keys:
+        for key in current_allocation_keys:
+            academic_year, day_iso, section, group_index, slot_set = key
+
+            # Find allocations matching this exact block identity
+            # We need to check each allocation's slots match our slot_set
+            candidate_query = (
+                select(ResourceAllocation)
+                .where(
+                    ResourceAllocation.academic_year == academic_year,
+                    ResourceAllocation.day_of_week == day_iso,
+                    ResourceAllocation.section == section,
+                    ResourceAllocation.group_index == group_index,
+                    ResourceAllocation.status == "CONFIRMED",
+                    ResourceAllocation.source_import_id.isnot(None),  # Only delete imported allocations
+                )
+            )
+
+            candidates = db.scalars(candidate_query).all()
+
+            for candidate in candidates:
+                # Check if this allocation's slots match our slot_set
+                candidate_slots = db.scalars(
+                    select(TimeSlot.code)
+                    .join(ResourceAllocationSlot, ResourceAllocationSlot.time_slot_id == TimeSlot.id)
+                    .where(ResourceAllocationSlot.allocation_id == candidate.id)
+                ).all()
+
+                candidate_slot_set = frozenset(candidate_slots)
+
+                if candidate_slot_set == slot_set:
+                    # This is a superseded allocation - delete it
+                    db.delete(candidate)
+
+    # Also delete any allocations from the exact same import session (stale preview data)
+    stale_allocs = db.scalars(
         select(ResourceAllocation).where(
             ResourceAllocation.source_import_id == preview.import_id
         )
     ).all()
-    for ea in existing_allocs:
-        db.delete(ea)
+    for sa in stale_allocs:
+        db.delete(sa)
 
     for acronym, days_map in entries_by_teacher.items():
         t_row = next((t for t in preview.teachers if t.acronym == acronym), None)
@@ -445,6 +503,7 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
             timetables_created.append(str(new_timetable.id))
 
     # Final flush before caller commits
+    db.flush()
 
     return {
         "teachers_created": teachers_created,

@@ -24,7 +24,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.api import staging
@@ -186,8 +186,10 @@ def confirm_import(
     - For DOCX: checks that all required blocks are resolved, converts to canonical
     - Re-validates against current DB state.
     - Rejects if any errors remain.
-    - Creates/reuses teachers and creates DRAFT timetables in **one transaction**.
-    - Never creates or modifies CONFIRMED timetables.
+        - DOCX: creates/reuses teachers and confirms this import's faculty timetables
+            and resource allocations in **one transaction**.
+        - XLSX: creates/reuses teachers and creates DRAFT timetables.
+        - Never modifies a pre-existing CONFIRMED timetable.
     - Rolls back **all** changes if any step fails.
     - Removes the staging entry on success.
     """
@@ -263,10 +265,15 @@ def confirm_import(
         result = persist_import(preview, db)
         db.flush()
         from app.models.models import ResourceAllocation, ScheduleEntry, Timetable
-        from app.services.availability import check_resource_conflicts
+        from app.services.availability import check_resource_conflicts_batch
 
         allocations = db.scalars(
-            select(ResourceAllocation).where(
+            select(ResourceAllocation)
+            .options(
+                selectinload(ResourceAllocation.resource_links),
+                selectinload(ResourceAllocation.slot_links),
+            )
+            .where(
                 ResourceAllocation.source_import_id == import_id,
                 ResourceAllocation.status == "DRAFT",
             )
@@ -276,44 +283,37 @@ def confirm_import(
             *(UUID(timetable_id) for timetable_id in result["timetables_replaced"]),
         ] if docx_preview is not None else []
         imported_timetables = db.scalars(
-            select(Timetable).where(Timetable.id.in_(timetable_ids))
+            select(Timetable)
+            .options(
+                selectinload(Timetable.entries).selectinload(ScheduleEntry.resource_links),
+                selectinload(Timetable.entries).selectinload(ScheduleEntry.slot_links),
+            )
+            .where(Timetable.id.in_(timetable_ids))
         ).all() if timetable_ids else []
 
-        def validate_resource_use(
-            academic_year: str,
-            day_of_week: int,
-            resource_ids: list[UUID],
-            time_slot_ids: list[UUID],
-        ) -> None:
-            if not resource_ids or not time_slot_ids:
-                return
-            has_conflict, error_message = check_resource_conflicts(
-                db=db,
-                academic_year=academic_year,
-                resource_ids=resource_ids,
-                day_of_week=day_of_week,
-                time_slot_ids=time_slot_ids,
-            )
-            if has_conflict:
-                raise PersistenceError(error_message or "Resource allocation conflict.")
-
+        resource_uses: list[tuple[str, int, list[UUID], list[UUID]]] = []
         if docx_preview is not None:
             for timetable in imported_timetables:
                 for entry in timetable.entries:
-                    validate_resource_use(
-                        academic_year=timetable.academic_year,
-                        day_of_week=entry.day_of_week,
-                        resource_ids=[link.resource_id for link in entry.resource_links],
-                        time_slot_ids=[link.time_slot_id for link in entry.slot_links],
-                    )
+                    resource_uses.append((
+                        timetable.academic_year,
+                        entry.day_of_week,
+                        [link.resource_id for link in entry.resource_links],
+                        [link.time_slot_id for link in entry.slot_links],
+                    ))
 
         for allocation in allocations:
-            validate_resource_use(
-                academic_year=allocation.academic_year,
-                day_of_week=allocation.day_of_week,
-                resource_ids=[link.resource_id for link in allocation.resource_links],
-                time_slot_ids=[link.time_slot_id for link in allocation.slot_links],
-            )
+            resource_uses.append((
+                allocation.academic_year,
+                allocation.day_of_week,
+                [link.resource_id for link in allocation.resource_links],
+                [link.time_slot_id for link in allocation.slot_links],
+            ))
+
+        conflict_results = check_resource_conflicts_batch(db, resource_uses)
+        for has_conflict, error_message in conflict_results:
+            if has_conflict:
+                raise PersistenceError(error_message or "Resource allocation conflict.")
 
         if docx_preview is not None:
             for timetable in imported_timetables:
@@ -332,10 +332,14 @@ def confirm_import(
         ) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
+        # Log the actual exception for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Import confirmation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                "An unexpected error occurred during import persistence. "
+                f"An unexpected error occurred during import persistence: {type(exc).__name__}: {str(exc)}. "
                 "All changes have been rolled back."
             ),
         ) from exc

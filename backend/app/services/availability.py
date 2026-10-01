@@ -510,3 +510,113 @@ def check_resource_conflicts(
         return True, f"Resource is already occupied by an external participant at slot {s_code}."
 
     return False, None
+
+
+def check_resource_conflicts_batch(
+    db: Session,
+    resource_uses: list[tuple[str, int, list[UUID], list[UUID]]],
+) -> list[tuple[bool, Optional[str]]]:
+    """Check many imported resource uses with one query per live-data source.
+
+    Each use is ``(academic_year, day_of_week, resource_ids, time_slot_ids)``.
+    The returned list corresponds to the input order and preserves the faculty
+    conflict precedence and messages of :func:`check_resource_conflicts`.
+    """
+    requested_keys: list[set[tuple[str, int, UUID, UUID]]] = []
+    all_keys: set[tuple[str, int, UUID, UUID]] = set()
+    academic_years: set[str] = set()
+    days: set[int] = set()
+    resource_ids: set[UUID] = set()
+    time_slot_ids: set[UUID] = set()
+
+    for academic_year, day_of_week, use_resource_ids, use_time_slot_ids in resource_uses:
+        keys = {
+            (academic_year, day_of_week, resource_id, time_slot_id)
+            for resource_id in use_resource_ids
+            for time_slot_id in use_time_slot_ids
+        }
+        requested_keys.append(keys)
+        all_keys.update(keys)
+        if keys:
+            academic_years.add(academic_year)
+            days.add(day_of_week)
+            resource_ids.update(use_resource_ids)
+            time_slot_ids.update(use_time_slot_ids)
+
+    if not all_keys:
+        return [(False, None) for _ in resource_uses]
+
+    faculty_conflicts: dict[tuple[str, int, UUID, UUID], str] = {}
+    faculty_rows = db.execute(
+        select(
+            Timetable.academic_year,
+            ScheduleEntry.day_of_week,
+            ScheduleEntryResource.resource_id,
+            ScheduleEntrySlot.time_slot_id,
+            TimeSlot.code,
+        )
+        .join(ScheduleEntry, ScheduleEntry.timetable_id == Timetable.id)
+        .join(ScheduleEntryResource, ScheduleEntryResource.schedule_entry_id == ScheduleEntry.id)
+        .join(ScheduleEntrySlot, ScheduleEntrySlot.schedule_entry_id == ScheduleEntry.id)
+        .join(TimeSlot, TimeSlot.id == ScheduleEntrySlot.time_slot_id)
+        .where(
+            Timetable.academic_year.in_(academic_years),
+            Timetable.status == "CONFIRMED",
+            ScheduleEntry.day_of_week.in_(days),
+            ScheduleEntryResource.resource_id.in_(resource_ids),
+            ScheduleEntrySlot.time_slot_id.in_(time_slot_ids),
+        )
+    ).all()
+    for academic_year, day_of_week, resource_id, time_slot_id, slot_code in faculty_rows:
+        key = (academic_year, day_of_week, resource_id, time_slot_id)
+        if key in all_keys:
+            faculty_conflicts[key] = slot_code
+
+    allocation_conflicts: dict[tuple[str, int, UUID, UUID], str] = {}
+    allocation_rows = db.execute(
+        select(
+            ResourceAllocation.academic_year,
+            ResourceAllocation.day_of_week,
+            ResourceAllocationResource.resource_id,
+            ResourceAllocationSlot.time_slot_id,
+            TimeSlot.code,
+        )
+        .join(ResourceAllocationResource, ResourceAllocationResource.allocation_id == ResourceAllocation.id)
+        .join(ResourceAllocationSlot, ResourceAllocationSlot.allocation_id == ResourceAllocation.id)
+        .join(TimeSlot, TimeSlot.id == ResourceAllocationSlot.time_slot_id)
+        .where(
+            ResourceAllocation.academic_year.in_(academic_years),
+            ResourceAllocation.status == "CONFIRMED",
+            ResourceAllocation.day_of_week.in_(days),
+            ResourceAllocationResource.resource_id.in_(resource_ids),
+            ResourceAllocationSlot.time_slot_id.in_(time_slot_ids),
+        )
+    ).all()
+    for academic_year, day_of_week, resource_id, time_slot_id, slot_code in allocation_rows:
+        key = (academic_year, day_of_week, resource_id, time_slot_id)
+        if key in all_keys:
+            allocation_conflicts[key] = slot_code
+
+    results: list[tuple[bool, Optional[str]]] = []
+    for use_keys in requested_keys:
+        matching_faculty = use_keys.intersection(faculty_conflicts)
+        if matching_faculty:
+            slot_code = faculty_conflicts[next(iter(matching_faculty))]
+            results.append((
+                True,
+                f"Resource is already occupied by a confirmed teacher timetable at slot {slot_code}.",
+            ))
+            continue
+
+        matching_allocations = use_keys.intersection(allocation_conflicts)
+        if matching_allocations:
+            slot_code = allocation_conflicts[next(iter(matching_allocations))]
+            results.append((
+                True,
+                f"Resource is already occupied by an external participant at slot {slot_code}.",
+            ))
+            continue
+
+        results.append((False, None))
+
+    return results
