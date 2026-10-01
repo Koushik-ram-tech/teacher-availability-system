@@ -529,18 +529,18 @@ class TestActivityAmbiguityIndependent:
                         for b in blocked[:3])
         )
 
-    def test_ambiguous_activity_blocks_are_in_ready(self, preview):
-        """Activity-AMBIGUOUS blocks with DETERMINISTIC teacher → occupancy_ready_blocks."""
-        activity_only_in_review = [
-            b for b in preview.occupancy_review_blocks
-            if b.teacher_occupancy_status in ("DETERMINISTIC", "UNSPECIFIED")
-            and b.resource_occupancy_status in ("DETERMINISTIC", "UNSPECIFIED")
+    def test_competing_activity_candidates_require_review(self, preview):
+        """Multiple competing activity candidates in one group go to review."""
+        competing_ready = [
+            b for b in preview.occupancy_ready_blocks
+            if b.activity_semantic_status == "AMBIGUOUS"
+            and len(getattr(b, "activity_groups", []) or []) <= 1
+            and len(b.activity_candidates) != 1
         ]
-        assert activity_only_in_review == [], (
-            f"Activity-only blocks wrongly in review: {len(activity_only_in_review)}\n"
-            + "\n".join(f"  {b.day} {b.section} teacher={b.teacher_occupancy_status} "
-                        f"resource={b.resource_occupancy_status}"
-                        for b in activity_only_in_review[:3])
+        assert competing_ready == [], (
+            f"Competing-activity blocks wrongly in ready: {len(competing_ready)}\n"
+            + "\n".join(f"  {b.day} {b.section} {b.slots} {[a.code for a in b.activity_candidates]}"
+                        for b in competing_ready[:3])
         )
 
     def test_three_statuses_independent(self, all_blocks):

@@ -2140,6 +2140,12 @@ input:focus, select:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99
   font-size: 14px;
 }
 
+.avail-notice {
+  margin-top: 8px;
+  color: #a16207;
+  font-weight: 600;
+}
+
 .avail-table-wrapper {
   overflow-x: auto;
   border-radius: 12px;

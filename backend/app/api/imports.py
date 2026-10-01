@@ -186,10 +186,9 @@ def confirm_import(
     - For DOCX: checks that all required blocks are resolved, converts to canonical
     - Re-validates against current DB state.
     - Rejects if any errors remain.
-        - DOCX: creates/reuses teachers and confirms this import's faculty timetables
+        - Creates/reuses teachers and confirms this import's faculty timetables
             and resource allocations in **one transaction**.
-        - XLSX: creates/reuses teachers and creates DRAFT timetables.
-        - Never modifies a pre-existing CONFIRMED timetable.
+        - Never modifies a pre-existing MANUAL CONFIRMED timetable.
     - Rolls back **all** changes if any step fails.
     - Removes the staging entry on success.
     """
@@ -281,7 +280,7 @@ def confirm_import(
         timetable_ids = [
             *(UUID(timetable_id) for timetable_id in result["timetables_created"]),
             *(UUID(timetable_id) for timetable_id in result["timetables_replaced"]),
-        ] if docx_preview is not None else []
+        ]
         imported_timetables = db.scalars(
             select(Timetable)
             .options(
@@ -292,15 +291,14 @@ def confirm_import(
         ).all() if timetable_ids else []
 
         resource_uses: list[tuple[str, int, list[UUID], list[UUID]]] = []
-        if docx_preview is not None:
-            for timetable in imported_timetables:
-                for entry in timetable.entries:
-                    resource_uses.append((
-                        timetable.academic_year,
-                        entry.day_of_week,
-                        [link.resource_id for link in entry.resource_links],
-                        [link.time_slot_id for link in entry.slot_links],
-                    ))
+        for timetable in imported_timetables:
+            for entry in timetable.entries:
+                resource_uses.append((
+                    timetable.academic_year,
+                    entry.day_of_week,
+                    [link.resource_id for link in entry.resource_links],
+                    [link.time_slot_id for link in entry.slot_links],
+                ))
 
         for allocation in allocations:
             resource_uses.append((
@@ -315,9 +313,8 @@ def confirm_import(
             if has_conflict:
                 raise PersistenceError(error_message or "Resource allocation conflict.")
 
-        if docx_preview is not None:
-            for timetable in imported_timetables:
-                timetable.status = "CONFIRMED"
+        for timetable in imported_timetables:
+            timetable.status = "CONFIRMED"
 
         for allocation in allocations:
             allocation.status = "CONFIRMED"

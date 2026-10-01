@@ -58,6 +58,7 @@ class TeacherAvailabilityOut(BaseModel):
     """Teacher weekly or daily availability."""
     teacher: dict  # {id, name, acronym}
     academic_year: str
+    has_confirmed_timetable: bool
     days: dict[str, DayAvailabilityOut]
 
 
@@ -82,21 +83,26 @@ class ResourceCatalogItem(BaseModel):
 
 @router.get("/resources/catalog", response_model=list[ResourceCatalogItem])
 def get_resource_catalog(
-    department: str = Query(..., min_length=1),
     academic_year: str = Query(...),
+    department: str | None = Query(None, min_length=1),
     day: str | None = Query(None),
     slots: str = Query("", description="Comma-separated slot codes"),
     db: Session = Depends(get_db),
 ) -> list[ResourceCatalogItem]:
-    """List active shared/department resources, excluding slot conflicts."""
+    """List active shared/department resources, excluding confirmed slot conflicts."""
+    department_filter = []
+    if department:
+        department_filter = [
+            or_(
+                Resource.department.is_(None),
+                func.lower(func.trim(Resource.department)) == department.strip().lower(),
+            )
+        ]
     resources = db.scalars(
         select(Resource)
         .where(
             Resource.is_active.is_(True),
-            or_(
-                Resource.department.is_(None),
-                func.lower(func.trim(Resource.department)) == department.strip().lower(),
-            ),
+            *department_filter,
         )
         .order_by(Resource.name)
     ).all()
@@ -128,7 +134,7 @@ def get_resource_catalog(
             .join(TimeSlot, TimeSlot.id == ScheduleEntrySlot.time_slot_id)
             .where(
                 Timetable.academic_year == academic_year,
-                Timetable.status.in_(["DRAFT", "CONFIRMED"]),
+                Timetable.status == "CONFIRMED",
                 ScheduleEntry.day_of_week == day_to_iso[day_iso],
                 ScheduleEntryResource.resource_id.in_(resource_ids),
                 TimeSlot.code.in_(slot_codes),
@@ -141,7 +147,7 @@ def get_resource_catalog(
             .join(TimeSlot, TimeSlot.id == ResourceAllocationSlot.time_slot_id)
             .where(
                 ResourceAllocation.academic_year == academic_year,
-                ResourceAllocation.status.in_(["DRAFT", "CONFIRMED"]),
+                ResourceAllocation.status == "CONFIRMED",
                 ResourceAllocation.day_of_week == day_to_iso[day_iso],
                 ResourceAllocationResource.resource_id.in_(resource_ids),
                 TimeSlot.code.in_(slot_codes),
@@ -233,6 +239,7 @@ def get_teacher_availability(
             "acronym": availability.teacher_acronym
         },
         academic_year=availability.academic_year,
+        has_confirmed_timetable=availability.has_confirmed_timetable,
         days=days_out
     )
 

@@ -194,8 +194,8 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
     # ---------------------------------------------------------------------- #
 
     days: dict[str, list[ScheduleImportRow]] = {}
-    # Collision tracking: (acronym, day) → set of slot codes already claimed
-    teacher_day_slots: dict[tuple[str, str], set[str]] = {}
+    # Collision tracking: (acronym, day) → occupancies already claimed
+    teacher_day_occupancies: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     for raw_s in raw["schedule"]:
         row_ref = raw_s["row_ref"]
@@ -354,18 +354,71 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
                             f"Valid pairs: {valid_str}."
                         )
 
-        # Intra-workbook duplicate slot collision per teacher/day
+        # Intra-workbook duplicate slot collision per teacher/day.
+        # Same teacher + day + slots + subject + room with a *different* section
+        # is a combined class and shares provenance so occupancy checks accept it.
+        source_cell_text: str | None = None
+        group_index: int | None = None
+        subject_or_activity = raw_s.get("subject_or_activity")
+        if isinstance(subject_or_activity, str):
+            subject_or_activity = subject_or_activity.strip() or None
+        section = raw_s.get("section")
+        if isinstance(section, str):
+            section = section.strip() or None
+        room = raw_s.get("room")
+        if isinstance(room, str):
+            room = room.strip() or None
+
         if teacher_acronym and day and slot_ids and not row_errors:
             key = (teacher_acronym, day)
-            used = teacher_day_slots.setdefault(key, set())
-            overlap = used & set(slot_ids)
+            occupancies = teacher_day_occupancies.setdefault(key, [])
+            overlap = next(
+                (existing for existing in occupancies if existing["slots"] & set(slot_ids)),
+                None,
+            )
             if overlap:
-                row_errors.append(
-                    f"{row_ref}: Teacher {teacher_acronym} already occupies "
-                    f"slot(s) {sorted(overlap)} on {day} (within this workbook)."
+                is_combined = (
+                    overlap["slots"] == set(slot_ids)
+                    and overlap["subject"] == subject_or_activity
+                    and overlap["room"] == room
+                    and overlap["section"] is not None
+                    and section is not None
+                    and overlap["section"] != section
                 )
+                if is_combined:
+                    source_cell_text = overlap["source_cell_text"]
+                    group_index = overlap["group_index"]
+                    occupancies.append(
+                        {
+                            "slots": set(slot_ids),
+                            "subject": subject_or_activity,
+                            "room": room,
+                            "section": section,
+                            "source_cell_text": source_cell_text,
+                            "group_index": group_index,
+                        }
+                    )
+                else:
+                    row_errors.append(
+                        f"{row_ref}: Teacher {teacher_acronym} already occupies "
+                        f"slot(s) {sorted(overlap['slots'] & set(slot_ids))} on {day} "
+                        f"(within this workbook)."
+                    )
             else:
-                used.update(slot_ids)
+                source_cell_text = (
+                    f"{subject_or_activity or ''}|{room or ''}|{'+'.join(slot_ids)}"
+                )
+                group_index = 0
+                occupancies.append(
+                    {
+                        "slots": set(slot_ids),
+                        "subject": subject_or_activity,
+                        "room": room,
+                        "section": section,
+                        "source_cell_text": source_cell_text,
+                        "group_index": group_index,
+                    }
+                )
 
         errors.extend(row_errors)
 
@@ -377,11 +430,13 @@ def normalize(raw: dict[str, Any]) -> ImportPreview:
                 day=day,
                 slot_ids=slot_ids,
                 entry_type=entry_type,
-                subject_or_activity=raw_s.get("subject_or_activity"),
-                section=raw_s.get("section"),
-                room=raw_s.get("room"),
+                subject_or_activity=subject_or_activity,
+                section=section,
+                room=room,
                 notes=raw_s.get("notes"),
                 warnings=[],
+                group_index=group_index,
+                source_cell_text=source_cell_text,
             )
             days.setdefault(day, []).append(sched_row)
 

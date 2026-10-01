@@ -63,8 +63,8 @@ def convert_preview_to_canonical(
             source_location=block.source_location
         )
 
-        combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or "Unknown Activity"
         entry_type = block.activity_candidates[0].inferred_type if block.activity_candidates else "CLASS"
+        combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or entry_type
         combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
 
         for teacher in block.teacher_candidates:

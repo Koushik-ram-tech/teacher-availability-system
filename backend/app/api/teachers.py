@@ -18,6 +18,8 @@ from app.schemas.timetable import (
     TimetableWriteOut,
 )
 
+from app.services.resource_linking import link_schedule_entry_resources
+
 router = APIRouter(prefix="/teachers", tags=["teachers"])
 
 
@@ -388,6 +390,7 @@ def create_timetable(
         )
 
     code_to_uuid = _get_slot_code_to_uuid(db)
+    resource_cache: dict = {}
 
     timetable = Timetable(
         teacher_id=teacher_id,
@@ -412,6 +415,13 @@ def create_timetable(
             )
             db.add(entry)
             db.flush()
+            link_schedule_entry_resources(
+                db,
+                entry,
+                entry_in.resource_codes,
+                entry_in.room,
+                resource_cache,
+            )
             for slot_code in entry_in.slot_ids:
                 db.add(ScheduleEntrySlot(
                     schedule_entry_id=entry.id,
@@ -466,6 +476,7 @@ def update_timetable(
         )
 
     code_to_uuid = _get_slot_code_to_uuid(db)
+    resource_cache: dict = {}
 
     # Validate all slot codes before touching the database.
     unknown_codes: set[str] = set()
@@ -502,6 +513,13 @@ def update_timetable(
             )
             db.add(entry)
             db.flush()
+            link_schedule_entry_resources(
+                db,
+                entry,
+                entry_in.resource_codes,
+                entry_in.room,
+                resource_cache,
+            )
             for slot_code in entry_in.slot_ids:
                 db.add(ScheduleEntrySlot(
                     schedule_entry_id=entry.id,
@@ -554,7 +572,8 @@ def confirm_timetable(
     - Returns a TimetableConfirmOut summary.
 
     CONFIRMED timetables are NEVER modified by this endpoint — only DRAFTs
-    are promoted.  The Excel import flow is also DRAFT-only and is unaffected.
+    are promoted.  Excel import confirmation now promotes to CONFIRMED
+    directly, so this endpoint is for manual drafts only.
     """
     from datetime import datetime, timezone
 

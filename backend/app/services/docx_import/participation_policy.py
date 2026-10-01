@@ -78,6 +78,12 @@ DEFAULT_POLICY_MAP: dict[str, ActivityParticipationPolicy] = {
     # Physical / sports
     "PHYSICAL ACTIVITY": ActivityParticipationPolicy.STUDENT_MANAGED,
     "PHYSICAL ACTIVITIES": ActivityParticipationPolicy.STUDENT_MANAGED,
+    "SPORTS": ActivityParticipationPolicy.STUDENT_MANAGED,
+    "SPORT": ActivityParticipationPolicy.STUDENT_MANAGED,
+
+    # Mentoring (not a faculty-taught period)
+    "MENTORING": ActivityParticipationPolicy.STUDENT_MANAGED,
+    "MENTOR": ActivityParticipationPolicy.STUDENT_MANAGED,
 
     # Library / self-study
     "LIBRARY/RESEARCH ACTIVITY": ActivityParticipationPolicy.STUDENT_MANAGED,

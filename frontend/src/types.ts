@@ -464,18 +464,22 @@ export interface DayAvailability {
 }
 
 export interface TeacherAvailability {
-  teacher_id: string;
-  teacher_name: string;
-  teacher_acronym: string;
-  teacher_department?: string | null;
+  teacher: {
+    id: string;
+    name: string;
+    acronym: string;
+  };
   academic_year: string;
+  has_confirmed_timetable: boolean;
   days: Record<string, DayAvailability>;
 }
 
 export interface ResourceAvailability {
-  resource_id: string;
-  resource_name: string;
-  resource_type: string;
+  resource: {
+    id: string;
+    code: string;
+    name: string;
+  };
   academic_year: string;
   days: Record<string, DayAvailability>;
 }

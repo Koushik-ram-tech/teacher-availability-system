@@ -251,13 +251,18 @@ export async function getResourceAvailabilityByCode(
 }
 
 export async function getResourceCatalog(
-  department: string,
+  department: string | undefined,
   academicYear: string,
-  day: string,
-  slots: string[],
+  day?: string,
+  slots?: string[],
 ): Promise<ResourceCatalogItem[]> {
   const response = await api.get<ResourceCatalogItem[]>('/availability/resources/catalog', {
-    params: { department, academic_year: academicYear, day, slots: slots.join(',') },
+    params: {
+      ...(department ? { department } : {}),
+      academic_year: academicYear,
+      ...(day ? { day } : {}),
+      ...(slots?.length ? { slots: slots.join(',') } : {}),
+    },
   });
   return response.data;
 }

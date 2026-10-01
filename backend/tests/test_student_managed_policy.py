@@ -105,8 +105,11 @@ class TestPolicyClassification:
     def test_library_research_is_student_managed(self):
         assert classify_activity("Library/Research Activity") == ActivityParticipationPolicy.STUDENT_MANAGED
 
-    def test_extended_class_is_student_managed(self):
-        assert classify_activity("Extended class") == ActivityParticipationPolicy.STUDENT_MANAGED
+    def test_mentoring_is_student_managed(self):
+        assert classify_activity("Mentoring") == ActivityParticipationPolicy.STUDENT_MANAGED
+
+    def test_sports_is_student_managed(self):
+        assert classify_activity("Sports") == ActivityParticipationPolicy.STUDENT_MANAGED
 
     def test_normal_subject_is_faculty_managed(self):
         """Test 7: Normal faculty activities still produce FACULTY_MANAGED."""

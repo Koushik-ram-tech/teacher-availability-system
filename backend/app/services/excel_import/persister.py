@@ -4,9 +4,11 @@ excel_import.persister
 Transactional persistence layer for confirmed imports.
 
 Rules enforced here:
-  - NEVER creates a CONFIRMED timetable.
-  - NEVER touches an existing CONFIRMED timetable.
-  - Deletes and replaces the DRAFT timetable if one already exists.
+  - Writes faculty timetables as DRAFT; the caller promotes them to CONFIRMED
+    after resource-conflict checks (same path as DOCX).
+  - Replaces an existing DRAFT, or an existing IMPORT-sourced CONFIRMED
+    timetable, for the same teacher and year. MANUAL CONFIRMED rows are left
+    untouched.
   - Runs full TimetableWriteIn Pydantic validation before any DB writes.
   - Automatically populates resources from room values and links schedule_entries.
   - Implements safe resource allocation replacement for re-imports.
@@ -30,9 +32,7 @@ from app.models.models import (
     Resource,
     ResourceAllocation,
     ResourceAllocationSlot,
-    ResourceAllocationResource,
     ScheduleEntry,
-    ScheduleEntryResource,
     ScheduleEntrySlot,
     Teacher,
     TimeSlot,
@@ -40,10 +40,9 @@ from app.models.models import (
 )
 from app.schemas.imports import ImportPreview
 from app.schemas.timetable import ScheduleEntryIn, TimetableWriteIn
-from app.services.resource_populator import (
-    classify_resource_type,
-    find_or_create_resource,
-    create_alias_if_needed,
+from app.services.resource_linking import (
+    link_allocation_resources,
+    link_schedule_entry_resources,
 )
 
 
@@ -54,6 +53,10 @@ class PersistenceError(Exception):
 def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     """
     Write all teachers and DRAFT timetables from *preview* to the database.
+
+    Faculty timetables are stored as DRAFT so the caller can conflict-check
+    them before promoting to CONFIRMED. Re-import replaces a previous
+    IMPORT-sourced CONFIRMED timetable for the same teacher and year.
 
     Automatically populates resources from room values and links schedule_entries.
 
@@ -165,11 +168,6 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
     # Step 3: Create/replace DRAFT timetable per teacher                      #
     # ---------------------------------------------------------------------- #
 
-    from app.models.models import ResourceAllocation, ResourceAllocationSlot, ResourceAllocationResource
-    from app.domain.resources import normalize_resource_name
-    from app.services.availability import check_resource_conflicts
-    import re
-
     # Build a set of (academic_year, day, section, group, slot codes) from current import
     # This defines the "replacement identity" for superseding old allocations
     current_allocation_keys = set()
@@ -269,51 +267,16 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                             time_slot_id=ts_id
                         ))
 
-                    # Handle resources
-                    codes_to_link: list[str] = []
-                    if ir.resource_codes:
-                        codes_to_link = [c.strip() for c in ir.resource_codes if c.strip()]
-                    elif ir.room and ir.room.strip():
-                        codes_to_link = [ir.room.strip()]
-
-                    for code in codes_to_link:
-                        normalized = normalize_resource_name(code)
-                        if normalized in resource_cache:
-                            resource = resource_cache[normalized]
-                            resources_reused_count += 1
-                        else:
-                            # Check if resource already exists in DB before creating
-                            existing_count = db.execute(
-                                select(func.count(Resource.id))
-                                .where(Resource.normalized_name == normalized)
-                                .where(Resource.department.is_(None))
-                            ).scalar()
-
-                            resource_type = classify_resource_type(code)
-                            resource = find_or_create_resource(db=db, name=code, resource_type=resource_type, department=None)
-                            resource_cache[normalized] = resource
-
-                            if existing_count == 0:
-                                resources_created_count += 1
-                            else:
-                                resources_reused_count += 1
-
-                            # Create common aliases
-                            if "lab" in code.lower():
-                                if " " not in code:
-                                    spaced = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', code)
-                                    if spaced != code:
-                                        create_alias_if_needed(db, resource, spaced)
-                                else:
-                                    no_space = code.replace(" ", "")
-                                    if no_space != code:
-                                        create_alias_if_needed(db, resource, no_space)
-
-                        db.add(ResourceAllocationResource(
-                            allocation_id=allocation.id,
-                            resource_id=resource.id
-                        ))
-                        entries_linked_count += 1
+                    stats = link_allocation_resources(
+                        db,
+                        allocation,
+                        ir.resource_codes,
+                        ir.room,
+                        resource_cache,
+                    )
+                    resources_created_count += stats.created
+                    resources_reused_count += stats.reused
+                    entries_linked_count += stats.linked
 
                     # NO conflict validation here - validation happens during DRAFT→CONFIRMED promotion
                     # This eliminates N+1 queries during import
@@ -327,10 +290,9 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                 "to a teacher ID.  This is a logic error."
             )
 
-        # Ensure we never touch a CONFIRMED timetable
-        # (we only create/replace DRAFT)
-
-        # Delete existing DRAFT timetable if present (cascade removes entries+slots)
+        # Replace an existing DRAFT, or a previous IMPORT-sourced CONFIRMED
+        # timetable, so confirm can promote the new draft without violating
+        # one-CONFIRMED-per-teacher-year. MANUAL CONFIRMED rows are not deleted.
         existing_draft: Timetable | None = db.scalar(
             select(Timetable).where(
                 Timetable.teacher_id == teacher_id,
@@ -338,9 +300,20 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                 Timetable.status == "DRAFT",
             )
         )
-        replaced = existing_draft is not None
+        existing_import: Timetable | None = db.scalar(
+            select(Timetable).where(
+                Timetable.teacher_id == teacher_id,
+                Timetable.academic_year == preview.academic_year,
+                Timetable.status == "CONFIRMED",
+                Timetable.source == "IMPORT",
+            )
+        )
+        replaced = existing_draft is not None or existing_import is not None
         if existing_draft is not None:
             db.delete(existing_draft)
+        if existing_import is not None:
+            db.delete(existing_import)
+        db.flush()
 
         # Build TimetableWriteIn payload for full Pydantic validation
         # (slot code validity, LAB rules, no duplicate slots per day, etc.)
@@ -404,76 +377,16 @@ def persist_import(preview: ImportPreview, db: Session) -> dict[str, Any]:
                 )
                 db.add(new_entry)
 
-                # --------------------------------------------------
-                # Resource Population Integration
-                # --------------------------------------------------
-                # Determine the list of individual resource codes to link:
-                #   - Use entry_in.resource_codes (authoritative, from parser)
-                #   - Fall back to entry_in.room as a single code if resource_codes is empty
-                #     (maintains backwards compat for manual entry and XLSX import)
-                from app.domain.resources import normalize_resource_name
-                import re
-
-                codes_to_link: list[str] = []
-                if entry_in.resource_codes:
-                    codes_to_link = [c.strip() for c in entry_in.resource_codes if c.strip()]
-                elif entry_in.room and entry_in.room.strip():
-                    # Legacy fallback: treat room string as a single resource code
-                    codes_to_link = [entry_in.room.strip()]
-
-                for code in codes_to_link:
-                    normalized = normalize_resource_name(code)
-
-                    if normalized in resource_cache:
-                        resource = resource_cache[normalized]
-                        resources_reused_count += 1
-                    else:
-                        # Check if resource already exists in DB
-                        existing_count = db.execute(
-                            select(func.count(Resource.id))
-                            .where(Resource.normalized_name == normalized)
-                            .where(Resource.department.is_(None))
-                        ).scalar()
-
-                        resource_type = classify_resource_type(code)
-                        resource = find_or_create_resource(
-                            db=db,
-                            name=code,
-                            resource_type=resource_type,
-                            department=None,  # Shared resources
-                        )
-
-                        if existing_count == 0:
-                            resources_created_count += 1
-                        else:
-                            resources_reused_count += 1
-
-                        resource_cache[normalized] = resource
-
-                        # Create common aliases (Lab1A <-> Lab 1A)
-                        if "lab" in code.lower():
-                            if " " not in code:
-                                spaced = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', code)
-                                if spaced != code:
-                                    create_alias_if_needed(db, resource, spaced)
-                            else:
-                                no_space = code.replace(" ", "")
-                                if no_space != code:
-                                    create_alias_if_needed(db, resource, no_space)
-
-                    # Link via many-to-many join table (authoritative for multi-resource)
-                    db.add(ScheduleEntryResource(
-                        schedule_entry_id=new_entry.id,
-                        resource_id=resource.id,
-                    ))
-
-                    # Also set singular resource_id to first resource for backwards compat
-                    # (used by manual-entry availability queries that haven't migrated yet)
-                    if new_entry.resource_id is None:
-                        new_entry.resource_id = resource.id
-
-                if codes_to_link:
-                    entries_linked_count += len(codes_to_link)
+                stats = link_schedule_entry_resources(
+                    db,
+                    new_entry,
+                    entry_in.resource_codes,
+                    entry_in.room,
+                    resource_cache,
+                )
+                resources_created_count += stats.created
+                resources_reused_count += stats.reused
+                entries_linked_count += stats.linked
 
                 # Collect slot links for bulk insert
                 for code in entry_in.slot_ids:

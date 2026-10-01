@@ -485,6 +485,129 @@ def test_resource_catalog_filters_only_same_day_overlapping_slots(
     assert "FDC" in thursday_codes
 
 
+def test_teacher_without_confirmed_timetable_is_unknown(db, resource_db):
+    teacher = Teacher(
+        id=uuid.uuid4(),
+        name="No Timetable Teacher",
+        acronym="NTT",
+        level="PG",
+        program_id=resource_db.id,
+        semester=1,
+        department="Computer Applications",
+        is_active=True,
+    )
+    db.add(teacher)
+    db.flush()
+
+    availability = AvailabilityService.get_teacher_availability(
+        db, teacher.id, ACADEMIC_YEAR
+    )
+    assert availability is not None
+    assert availability.has_confirmed_timetable is False
+    assert availability.days["monday"].slots["S1"].status == "UNKNOWN"
+    assert availability.days["friday"].slots["S9"].status == "UNKNOWN"
+
+
+def test_manual_room_links_resource_occupancy(db, resource_db):
+    from app.services.resource_linking import link_schedule_entry_resources
+
+    teacher = Teacher(
+        id=uuid.uuid4(),
+        name="Manual Room Teacher",
+        acronym="MRT",
+        level="PG",
+        program_id=resource_db.id,
+        semester=1,
+        department="Computer Applications",
+        is_active=True,
+    )
+    timetable = Timetable(
+        id=uuid.uuid4(),
+        teacher_id=teacher.id,
+        academic_year=ACADEMIC_YEAR,
+        status="CONFIRMED",
+        source="MANUAL",
+    )
+    entry = ScheduleEntry(
+        id=uuid.uuid4(),
+        timetable_id=timetable.id,
+        day_of_week=1,
+        entry_type="CLASS",
+        subject_or_activity="DBMS",
+        section="I-A",
+        room="LAB1B",
+    )
+    db.add_all([teacher, timetable, entry])
+    db.flush()
+    db.add(ScheduleEntrySlot(schedule_entry_id=entry.id, time_slot_id=_slot_id(db, "S1")))
+    link_schedule_entry_resources(db, entry, None, "LAB1B", {})
+    db.flush()
+
+    resource = AvailabilityService.find_resource_by_code(db, "LAB1B")
+    assert resource is not None
+    availability = AvailabilityService.get_resource_availability(
+        db, resource.id, ACADEMIC_YEAR, "monday"
+    )
+    assert availability is not None
+    assert availability.days["monday"].slots["S1"].status == "OCCUPIED"
+
+
+def test_resource_catalog_ignores_draft_occupancy(client: TestClient, db, resource_db):
+    resource = Resource(
+        id=uuid.uuid4(),
+        name="Draft Lab",
+        normalized_name="draft lab",
+        resource_type="LAB",
+        department=None,
+        is_active=True,
+    )
+    teacher = Teacher(
+        id=uuid.uuid4(),
+        name="Draft Catalog Teacher",
+        acronym="DCT",
+        level="PG",
+        program_id=resource_db.id,
+        semester=1,
+        department="Computer Applications",
+        is_active=True,
+    )
+    timetable = Timetable(
+        id=uuid.uuid4(),
+        teacher_id=teacher.id,
+        academic_year=ACADEMIC_YEAR,
+        status="DRAFT",
+        source="MANUAL",
+    )
+    entry = ScheduleEntry(
+        id=uuid.uuid4(),
+        timetable_id=timetable.id,
+        day_of_week=1,
+        entry_type="LAB",
+        subject_or_activity="Python Lab",
+        section="I-A",
+        room="Draft Lab",
+    )
+    db.add_all([resource, teacher, timetable, entry])
+    db.flush()
+    db.add_all([
+        ScheduleEntryResource(schedule_entry_id=entry.id, resource_id=resource.id),
+        ScheduleEntrySlot(schedule_entry_id=entry.id, time_slot_id=_slot_id(db, "S1")),
+    ])
+    db.commit()
+
+    response = client.get(
+        "/api/v1/availability/resources/catalog",
+        params={
+            "department": "Computer Applications",
+            "academic_year": ACADEMIC_YEAR,
+            "day": "monday",
+            "slots": "S1",
+        },
+    )
+    assert response.status_code == 200
+    assert "Draft Lab" in {item["code"] for item in response.json()}
+
+
 def test_resource_persistence_reuses_existing_alias(db, resource_db):
     canonical = Resource(
         id=uuid.uuid4(),
@@ -680,37 +803,72 @@ def test_real_mca_docx_single_confirmation_resource_acceptance(
 
     assert upload_response.status_code == 200, upload_response.text
     preview = upload_response.json()
-    assert preview["unresolved_count"] == 4
-    import_id = preview["import_id"]
-
     resource_by_section = {
         "I-A": "CA1",
         "I-B": "CA2",
         "III -A": "Lab1A",
         "III-B": "Lab1B",
     }
-    remaining = 4
-    while remaining:
-        block = next(
-            block for block in preview["unresolved_blocks"]
-            if block["resolution_required"]
+    required_blocks = [
+        block for block in preview["unresolved_blocks"] if block["resolution_required"]
+    ]
+    placement_required = [
+        block for block in required_blocks
+        if block["section"] in resource_by_section
+        and any(
+            "placement" in (candidate.get("code") or "").lower()
+            for candidate in block["activity_candidates"]
         )
-        resource_code = resource_by_section[block["section"]]
+    ]
+    assert len(required_blocks) == 4
+    assert len(placement_required) == 4, (
+        f"Expected 4 Placement blocks requiring review, got {len(placement_required)}"
+    )
+    import_id = preview["import_id"]
+    while True:
+        block = next(
+            (block for block in preview["unresolved_blocks"] if block["resolution_required"]),
+            None,
+        )
+        if block is None:
+            break
+        activity_code = (
+            block["activity_candidates"][0]["code"]
+            if block["activity_candidates"]
+            else "CLASS"
+        )
+        teacher_acronym = (
+            block["teacher_candidates"][0]["acronym"]
+            if block["teacher_candidates"]
+            else None
+        )
+        is_placement = any(
+            "placement" in (candidate.get("code") or "").lower()
+            for candidate in block["activity_candidates"]
+        )
+        if is_placement:
+            teacher_acronym = None
+            resource_code = resource_by_section.get(block["section"])
+            entry_type = "OTHER"
+        elif block["resource_candidates"]:
+            resource_code = block["resource_candidates"][0]["code"]
+            entry_type = "CLASS"
+        else:
+            resource_code = None
+            entry_type = "CLASS"
         resolve_response = client.post(
             f"/api/v1/imports/{import_id}/resolve",
             json={
                 "resolutions": [{
                     "block_id": block["block_id"],
-                    "selected_activity": block["activity_candidates"][0]["code"],
-                    "selected_teacher": None,
+                    "selected_activity": activity_code,
+                    "selected_teacher": teacher_acronym,
                     "selected_resource": resource_code,
-                    "entry_type": "OTHER",
+                    "entry_type": entry_type,
                 }]
             },
         )
         assert resolve_response.status_code == 200, resolve_response.text
-        remaining -= 1
-        assert resolve_response.json()["remaining_unresolved"] == remaining
         preview["unresolved_blocks"] = [
             unresolved for unresolved in preview["unresolved_blocks"]
             if unresolved["block_id"] != block["block_id"]

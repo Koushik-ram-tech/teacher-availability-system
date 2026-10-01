@@ -137,8 +137,9 @@ def parse_docx_timetable(
         else:
             preview.occupancy_extraction_blocked_count += 1
 
-        # Occupancy-first routing: only genuine teacher/resource ambiguity -> review.
-        #
+        # Occupancy-first routing, plus activity review:
+        # teacher/resource AMBIGUOUS, blocked extraction, AMBIGUOUS activity,
+        # or MISSING activity on a faculty-managed block -> review.
         # STUDENT_MANAGED special rule:
         #   Teacher absence is INTENTIONAL for student-managed activities.
         #   UNSPECIFIED teacher status is NOT a reason to send to review.
@@ -150,8 +151,28 @@ def parse_docx_timetable(
         # be OK (resource-only blocks), so we don't add extra strictness.
         resource_needs_review = block.resource_occupancy_status == "AMBIGUOUS"
         extraction_blocked = not occupancy_result.extraction_successful
+        groups = getattr(block, "activity_groups", []) or []
+        # A single tokenized-ambiguous activity code (e.g. "ADA 3,4, DT 1,2") is
+        # the cell's occupancy label, not a silent guess. Multiple competing
+        # activity candidates in one group, or a missing faculty-managed
+        # activity, must be reviewed before confirm.
+        competing_activities = (
+            block.activity_semantic_status == "AMBIGUOUS"
+            and len(groups) <= 1
+            and len(block.activity_candidates) != 1
+        )
+        missing_faculty_activity = (
+            block.activity_semantic_status == "MISSING"
+            and policy != ActivityParticipationPolicy.STUDENT_MANAGED
+        )
+        activity_needs_review = competing_activities or missing_faculty_activity
 
-        needs_review = teacher_needs_review or resource_needs_review or extraction_blocked
+        needs_review = (
+            teacher_needs_review
+            or resource_needs_review
+            or extraction_blocked
+            or activity_needs_review
+        )
 
         if needs_review:
             preview.occupancy_review_blocks.append(block)

@@ -4,10 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 
 import { Shell } from '../components/Shell';
 import { AcademicYearSelect } from '../components/AcademicYearSelect';
-import { searchTeachers, getTeacherAvailability, getResourceAvailabilityByCode } from '../services/api';
+import { searchTeachers, getTeacherAvailability, getResourceAvailabilityByCode, getResourceCatalog } from '../services/api';
 import { getCurrentAcademicYear } from '../academicYears';
 import { formatTimeRange } from '../time';
-import type { Teacher, TeacherAvailability, ResourceAvailability, AvailabilityStatus } from '../types';
+import type { Teacher, TeacherAvailability, ResourceAvailability, AvailabilityStatus, ResourceCatalogItem } from '../types';
 import { FALLBACK_PERIODS } from '../types';
 
 const DEBOUNCE_MS = 300;
@@ -33,7 +33,7 @@ const SLOTS = FALLBACK_PERIODS.map((period) => ({
 
 type SearchMode = 'teacher' | 'resource';
 
-function AvailabilityGrid({
+export function AvailabilityGrid({
   data,
   mode,
 }: {
@@ -128,22 +128,20 @@ function AvailabilityGrid({
   return (
     <div className="avail-grid-container">
       <div className="avail-info-panel">
-        {mode === 'teacher' && 'teacher_name' in data && (
+        {mode === 'teacher' && 'teacher' in data && (
           <div className="avail-info">
-            <h3>{data.teacher_name}</h3>
-            <p className="muted">
-              {data.teacher_acronym}
-              {data.teacher_department && ` · ${data.teacher_department}`}
-            </p>
+            <h3>{data.teacher.name}</h3>
+            <p className="muted">{data.teacher.acronym}</p>
             <p className="muted">Academic Year: {data.academic_year}</p>
+            {!data.has_confirmed_timetable && (
+              <p className="avail-notice">No confirmed timetable for this year</p>
+            )}
           </div>
         )}
-        {mode === 'resource' && 'resource_name' in data && (
+        {mode === 'resource' && 'resource' in data && (
           <div className="avail-info">
-            <h3>{data.resource_name}</h3>
-            <p className="muted">
-              {data.resource_type}
-            </p>
+            <h3>{data.resource.name}</h3>
+            <p className="muted">{data.resource.code}</p>
             <p className="muted">Academic Year: {data.academic_year}</p>
           </div>
         )}
@@ -373,12 +371,29 @@ function ResourceSearchPanel({
   onSelect: (code: string) => void;
   academicYear: string;
 }) {
-  const [code, setCode] = useState('');
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedQuery(query.trim()), DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  const catalogQuery = useQuery({
+    queryKey: ['resource-catalog-search', academicYear],
+    queryFn: () => getResourceCatalog(undefined, academicYear),
+  });
+
+  const matches = (catalogQuery.data ?? []).filter((item: ResourceCatalogItem) => {
+    if (!debouncedQuery) return false;
+    const needle = debouncedQuery.toLowerCase();
+    return item.code.toLowerCase().includes(needle) || item.name.toLowerCase().includes(needle);
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = code.trim();
+    const trimmed = query.trim();
     if (trimmed) {
       onSelect(trimmed);
     }
@@ -394,20 +409,21 @@ function ResourceSearchPanel({
           <input
             ref={inputRef}
             className="avail-search-input"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Enter resource code (e.g., LAB1A, LAB 1A, I-A)…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search classroom or lab (e.g., LAB1B)…"
             autoFocus
             autoComplete="off"
             spellCheck={false}
             aria-label="Search resource"
           />
-          {code && (
+          {query && (
             <button
               type="button"
               className="avail-search-clear"
               onClick={() => {
-                setCode('');
+                setQuery('');
+                setDebouncedQuery('');
                 inputRef.current?.focus();
               }}
               aria-label="Clear"
@@ -416,20 +432,64 @@ function ResourceSearchPanel({
             </button>
           )}
         </div>
-        <button type="submit" className="avail-search-submit" disabled={!code.trim()}>
+        <button type="submit" className="avail-search-submit" disabled={!query.trim()}>
           Search Resource
         </button>
       </form>
 
-      <div className="avail-empty-state">
-        <span className="avail-empty-icon" aria-hidden>
-          🏫
-        </span>
-        <p>Enter a classroom, lab, or resource code</p>
-        <p className="muted" style={{ fontSize: '0.875rem', marginTop: '0.5rem' }}>
-          Examples: LAB1A, LAB 1A, I-A, II-B
-        </p>
-      </div>
+      {!debouncedQuery && (
+        <div className="avail-empty-state">
+          <span className="avail-empty-icon" aria-hidden>
+            🏫
+          </span>
+          <p>Search for a classroom, lab, or resource code</p>
+        </div>
+      )}
+
+      {debouncedQuery && catalogQuery.isLoading && (
+        <div className="avail-empty-state">
+          <p className="muted">Searching…</p>
+        </div>
+      )}
+
+      {debouncedQuery && catalogQuery.isError && (
+        <div className="avail-empty-state">
+          <p className="error-text">Search failed. Check backend connection.</p>
+        </div>
+      )}
+
+      {debouncedQuery && catalogQuery.isSuccess && matches.length === 0 && (
+        <div className="avail-empty-state">
+          <p>
+            No catalog match for <strong>"{debouncedQuery}"</strong>. Submit to search that code exactly.
+          </p>
+        </div>
+      )}
+
+      {matches.length > 0 && (
+        <div className="avail-results">
+          <p className="avail-results-count">
+            {matches.length} result{matches.length !== 1 ? 's' : ''}
+          </p>
+          <div className="avail-teacher-list">
+            {matches.map((item) => (
+              <button
+                key={item.id}
+                className="avail-teacher-card"
+                onClick={() => onSelect(item.code)}
+              >
+                <div className="avail-teacher-avatar">{item.resource_type.slice(0, 2)}</div>
+                <div className="avail-teacher-info">
+                  <strong>{item.name}</strong>
+                  <span className="muted">
+                    {item.code} · {item.resource_type}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

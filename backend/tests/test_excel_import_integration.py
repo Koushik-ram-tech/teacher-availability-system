@@ -8,8 +8,8 @@ Scenarios covered
 -----------------
 1. Upload valid workbook → 200, normalised preview returned, no timetable rows written.
 2. Upload invalid workbook → 200, errors list non-empty, no timetable rows written.
-3. Confirm valid import → teacher + DRAFT timetable created in DB.
-4. Confirm import never creates CONFIRMED timetable.
+3. Confirm valid import → teacher + CONFIRMED timetable created in DB.
+4. Confirm import creates a CONFIRMED timetable (searchable immediately).
 5. Exact academic-year is preserved end-to-end.
 6. ALL-OR-NOTHING rollback when one teacher fails (conflict blocks whole import).
 7. Re-uploading same workbook reuses existing teacher, does not duplicate timetable entries.
@@ -260,13 +260,13 @@ def test_import_upload_invalid_workbook_no_db_writes(pg_db: Session, pg_client: 
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: Confirm valid import → teacher + DRAFT timetable created
+# Scenario 3: Confirm valid import → teacher + CONFIRMED timetable created
 # ---------------------------------------------------------------------------
 
 
 @_requires_pg
-def test_import_confirm_creates_teacher_and_draft(pg_db: Session, pg_client: TestClient) -> None:
-    """Confirm a valid import → teacher created + DRAFT timetable in DB."""
+def test_import_confirm_creates_teacher_and_confirmed(pg_db: Session, pg_client: TestClient) -> None:
+    """Confirm a valid import → teacher created + CONFIRMED timetable in DB."""
     suffix = _unique_suffix()
     program = _get_active_pg_program(pg_db)
     slot_codes = _get_slot_codes_pg(pg_db)
@@ -315,7 +315,7 @@ def test_import_confirm_creates_teacher_and_draft(pg_db: Session, pg_client: Tes
         {"tid": teacher_id, "yr": academic_year},
     ).mappings().first()
     assert timetable is not None
-    assert timetable["status"] == "DRAFT"
+    assert timetable["status"] == "CONFIRMED"
     assert timetable["source"] == "IMPORT"
 
     # Clean up
@@ -323,13 +323,13 @@ def test_import_confirm_creates_teacher_and_draft(pg_db: Session, pg_client: Tes
 
 
 # ---------------------------------------------------------------------------
-# Scenario 4: Confirm never creates CONFIRMED timetable
+# Scenario 4: Confirm creates CONFIRMED timetable
 # ---------------------------------------------------------------------------
 
 
 @_requires_pg
-def test_import_confirm_never_creates_confirmed(pg_db: Session, pg_client: TestClient) -> None:
-    """After confirm, no CONFIRMED timetable rows should exist for this teacher."""
+def test_import_confirm_creates_confirmed(pg_db: Session, pg_client: TestClient) -> None:
+    """After confirm, a CONFIRMED timetable exists for this teacher."""
     suffix = _unique_suffix()
     program = _get_active_pg_program(pg_db)
     slot_codes = _get_slot_codes_pg(pg_db)
@@ -371,8 +371,59 @@ def test_import_confirm_never_creates_confirmed(pg_db: Session, pg_client: TestC
             ),
             {"tid": teacher_id},
         ).scalar()
-        assert confirmed == 0
+        assert confirmed == 1
         _delete_test_teacher(pg_db, teacher_id)
+
+
+# ---------------------------------------------------------------------------
+# Scenario 4b: Confirm makes the teacher searchable as OCCUPIED
+# ---------------------------------------------------------------------------
+
+
+@_requires_pg
+def test_import_confirm_exposes_teacher_occupancy(pg_db: Session, pg_client: TestClient) -> None:
+    """After Excel confirm, teacher availability shows OCCUPIED for the imported slot."""
+    suffix = _unique_suffix()
+    program = _get_active_pg_program(pg_db)
+    slot_codes = _get_slot_codes_pg(pg_db)
+    assert slot_codes, "No active time slots in DB."
+
+    teacher_acronym = f"IMP{suffix[:5]}"
+    teacher_name = f"IMPORT_OCCUPY_{suffix}"
+    academic_year = "2099-2100"
+    slot = slot_codes[0]
+
+    xlsx_bytes = _build_xlsx(
+        academic_year=academic_year,
+        teacher_name=teacher_name,
+        teacher_acronym=teacher_acronym,
+        program_name=program["name"],
+        level=program["level"],
+        slot=slot,
+    )
+
+    up = pg_client.post(
+        "/api/v1/imports/excel",
+        files={"file": ("t.xlsx", xlsx_bytes, "application/octet-stream")},
+        data={"academic_year": academic_year},
+    )
+    assert up.status_code == 200, up.text
+    assert not up.json()["errors"], up.json()["errors"]
+
+    conf = pg_client.post(f"/api/v1/imports/{up.json()['import_id']}/confirm")
+    assert conf.status_code == 200, conf.text
+    teacher_id = conf.json()["teachers_created"][0]
+
+    avail = pg_client.get(
+        f"/api/v1/availability/teachers/{teacher_id}",
+        params={"academic_year": academic_year, "day": "monday"},
+    )
+    assert avail.status_code == 200, avail.text
+    body = avail.json()
+    assert body["has_confirmed_timetable"] is True
+    assert body["days"]["monday"]["slots"][slot]["status"] == "OCCUPIED"
+
+    _delete_test_teacher(pg_db, teacher_id)
 
 
 # ---------------------------------------------------------------------------
@@ -498,17 +549,17 @@ def test_import_conflict_blocks_entire_import(pg_db: Session, pg_client: TestCli
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: Re-uploading same workbook reuses teacher, replaces DRAFT
+# Scenario 7: Re-uploading same workbook reuses teacher, replaces CONFIRMED
 # ---------------------------------------------------------------------------
 
 
 @_requires_pg
-def test_import_re_upload_reuses_teacher_replaces_draft(pg_db: Session, pg_client: TestClient) -> None:
+def test_import_re_upload_reuses_teacher_replaces_confirmed(pg_db: Session, pg_client: TestClient) -> None:
     """
     Uploading and confirming the same workbook twice must:
       - Reuse the existing teacher (not create a duplicate).
-      - Replace the DRAFT timetable (timetables_replaced > 0 on 2nd confirm).
-      - Not leave two DRAFT rows for the same teacher/year.
+      - Replace the CONFIRMED timetable (timetables_replaced > 0 on 2nd confirm).
+      - Not leave two CONFIRMED rows for the same teacher/year.
     """
     suffix = _unique_suffix()
     program = _get_active_pg_program(pg_db)
@@ -548,14 +599,14 @@ def test_import_re_upload_reuses_teacher_replaces_draft(pg_db: Session, pg_clien
     assert len(result2["teachers_created"]) == 0
     assert len(result2["teachers_reused"]) == 1
 
-    # Only one DRAFT timetable must exist for this teacher/year
-    draft_count = pg_db.execute(
+    # Only one CONFIRMED timetable must exist for this teacher/year
+    confirmed_count = pg_db.execute(
         sa.text(
             "SELECT COUNT(*) FROM timetables "
-            "WHERE teacher_id = :tid AND academic_year = :yr AND status = 'DRAFT'"
+            "WHERE teacher_id = :tid AND academic_year = :yr AND status = 'CONFIRMED'"
         ),
         {"tid": teacher_id, "yr": academic_year},
     ).scalar()
-    assert draft_count == 1
+    assert confirmed_count == 1
 
     _delete_test_teacher(pg_db, teacher_id)

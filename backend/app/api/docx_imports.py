@@ -313,8 +313,10 @@ def _convert_parser_to_api_preview(
         elif not isinstance(block.source_location, str):
             source_loc_str = str(block.source_location)
 
-        combined_activity = ", ".join(ac.code for ac in block.activity_candidates) or "Unknown Activity"
+        activity_codes = [ac.code for ac in block.activity_candidates if ac.code]
+        combined_activity = ", ".join(activity_codes) if activity_codes else None
         entry_type = block.activity_candidates[0].inferred_type if block.activity_candidates else "CLASS"
+        subject_or_activity = combined_activity or entry_type
         combined_resource = ", ".join(rc.code for rc in block.resource_candidates) if block.resource_candidates else None
         combined_resource_codes = [rc.code for rc in block.resource_candidates]
 
@@ -344,8 +346,9 @@ def _convert_parser_to_api_preview(
         if len(groups) > 1:
             for i, group in enumerate(groups):
                 grp_activity = (
-                    ", ".join(ac.code for ac in group.activity_candidates)
+                    ", ".join(ac.code for ac in group.activity_candidates if ac.code)
                     or combined_activity
+                    or entry_type
                 )
                 grp_entry_type = (
                     group.activity_candidates[0].inferred_type
@@ -408,7 +411,7 @@ def _convert_parser_to_api_preview(
                         section=block.section,
                         slots=block.slots,
                         teacher_acronym=teacher.normalized_acronym,
-                        subject_or_activity=combined_activity,
+                        subject_or_activity=subject_or_activity,
                         resource_code=combined_resource,
                         resource_codes=combined_resource_codes,
                         source_location=source_loc_str,
@@ -428,7 +431,7 @@ def _convert_parser_to_api_preview(
                     section=block.section,
                     slots=block.slots,
                     teacher_acronym="",
-                    subject_or_activity=combined_activity,
+                    subject_or_activity=subject_or_activity,
                     resource_code=combined_resource,
                     resource_codes=combined_resource_codes,
                     source_location=source_loc_str,
@@ -448,7 +451,7 @@ def _convert_parser_to_api_preview(
                     section=block.section,
                     slots=block.slots,
                     teacher_acronym="",
-                    subject_or_activity=combined_activity,
+                    subject_or_activity=subject_or_activity,
                     resource_code=combined_resource,
                     resource_codes=combined_resource_codes,
                     source_location=source_loc_str,
@@ -520,9 +523,14 @@ def _convert_parser_to_api_preview(
         if extraction_blocked:
             reasons.append("occupancy extraction blocked")
             resolution_required = True
-        if block.activity_semantic_status in ("AMBIGUOUS", "MISSING"):
-            reasons.append(f"activity: {block.activity_semantic_status.lower()}")
-            # NOTE: activity ambiguity does NOT set resolution_required
+        if block.activity_semantic_status == "AMBIGUOUS":
+            reasons.append("activity: ambiguous")
+            resolution_required = True
+        elif block.activity_semantic_status == "MISSING" and not is_student_managed_block:
+            reasons.append("activity: missing")
+            resolution_required = True
+        elif block.activity_semantic_status == "MISSING":
+            reasons.append("activity: missing")
 
         ambiguity_reason = ", ".join(reasons) if reasons else "review required"
 

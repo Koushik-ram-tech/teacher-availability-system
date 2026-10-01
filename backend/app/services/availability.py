@@ -70,6 +70,7 @@ class TeacherAvailability:
     teacher_acronym: str
     academic_year: str
     days: dict[str, DayAvailability]  # day → DayAvailability
+    has_confirmed_timetable: bool = True
 
 
 @dataclass
@@ -87,8 +88,8 @@ class AvailabilityService:
 
     PRINCIPLE:
     - OCCUPIED: Confirmed occupancy exists in timetable
-    - FREE: No confirmed occupancy (default for working slots)
-    - UNKNOWN: Allocation genuinely ambiguous (not implemented in Phase 2)
+    - FREE: No confirmed occupancy on a confirmed timetable (default for working slots)
+    - UNKNOWN: No confirmed timetable exists for this teacher and year
 
     Does NOT require subject parsing or teacher→subject relationships.
     """
@@ -134,9 +135,9 @@ class AvailabilityService:
             )
         )
 
-        # If no confirmed timetable, all slots are FREE
+        # If no confirmed timetable, do not guess FREE.
         if not timetable:
-            return cls._build_teacher_availability_all_free(
+            return cls._build_teacher_availability_unknown(
                 teacher=teacher,
                 academic_year=academic_year,
                 day=day
@@ -162,7 +163,8 @@ class AvailabilityService:
             teacher_name=teacher.name,
             teacher_acronym=teacher.acronym,
             academic_year=academic_year,
-            days=days_availability
+            days=days_availability,
+            has_confirmed_timetable=True,
         )
 
     @classmethod
@@ -313,29 +315,21 @@ class AvailabilityService:
         return normalize_resource_name(code)
 
     @classmethod
-    def _build_teacher_availability_all_free(
+    def _build_teacher_availability_unknown(
         cls,
         teacher: Teacher,
         academic_year: str,
         day: Optional[str]
     ) -> TeacherAvailability:
-        """Build availability with all slots FREE (no timetable exists).
-
-        Args:
-            teacher: Teacher entity
-            academic_year: Academic year
-            day: Optional specific day
-
-        Returns:
-            TeacherAvailability with all FREE slots
-        """
+        """Build availability with UNKNOWN slots when no confirmed timetable exists."""
         days_to_include = [day] if day else WORKING_DAYS
 
         days_availability = {}
         for day_name in days_to_include:
             days_availability[day_name] = cls._build_day_availability(
                 day=day_name,
-                occupancy={}  # No occupancy = all FREE
+                occupancy={},
+                unoccupied_status="UNKNOWN",
             )
 
         return TeacherAvailability(
@@ -343,7 +337,8 @@ class AvailabilityService:
             teacher_name=teacher.name,
             teacher_acronym=teacher.acronym,
             academic_year=academic_year,
-            days=days_availability
+            days=days_availability,
+            has_confirmed_timetable=False,
         )
 
     @classmethod
@@ -383,16 +378,18 @@ class AvailabilityService:
     def _build_day_availability(
         cls,
         day: str,
-        occupancy: dict[str, Any]
+        occupancy: dict[str, Any],
+        unoccupied_status: str = "FREE",
     ) -> DayAvailability:
         """Build availability for a single day.
 
         Args:
             day: ISO day name
             occupancy: Dict of slot_code → Entry for occupied slots
+            unoccupied_status: Status used when a working slot has no occupancy
 
         Returns:
-            DayAvailability with FREE/OCCUPIED status for all working slots
+            DayAvailability with OCCUPIED or unoccupied_status for all working slots
         """
         slots = {}
 
@@ -408,10 +405,9 @@ class AvailabilityService:
                     room=getattr(entry, 'room', None)
                 )
             else:
-                # Slot is FREE (no occupancy)
                 slots[slot_code] = SlotAvailability(
                     slot_code=slot_code,
-                    status="FREE"
+                    status=unoccupied_status,
                 )
 
         return DayAvailability(
